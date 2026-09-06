@@ -1,0 +1,5 @@
+{
+  "database_url": "postgres://fake_user:fake_password@example.test/fake_db",
+  "arcjet_key": "ajkey_fake_target_only",
+  "jwt_secret": "fake-target-jwt-secret-only"
+}

@@ -1,6 +1,5 @@
 import { slidingWindow } from '@arcjet/node';
 import aj from '../config/arcjet.js';
-import logger from '../config/logger.js';
 
 const securityMiddleware = async (req, res, next) => {
   try {
@@ -36,7 +35,7 @@ const securityMiddleware = async (req, res, next) => {
     const decision = await client.protect(req);
 
     if (decision.isDenied() && decision.reason.isBot()) {
-      logger.warn('Bot request blocked', {
+      console.warn('Bot request blocked', {
         ip: req.ip,
         userAgent: req.get('User-Agent'),
         path: req.path,
@@ -49,7 +48,7 @@ const securityMiddleware = async (req, res, next) => {
     }
 
     if (decision.isDenied() && decision.reason.isShield()) {
-      logger.warn('Shield request blocked', {
+      console.warn('Shield request blocked', {
         ip: req.ip,
         userAgent: req.get('User-Agent'),
         path: req.path,
@@ -63,7 +62,7 @@ const securityMiddleware = async (req, res, next) => {
     }
 
     if (decision.isDenied() && decision.reason.isRateLimit()) {
-      logger.warn('Rate limit exceeded', {
+      console.warn('Rate limit exceeded', {
         ip: req.ip,
         userAgent: req.get('User-Agent'),
         path: req.path,
@@ -77,7 +76,7 @@ const securityMiddleware = async (req, res, next) => {
 
     next();
   } catch (error) {
-    logger.error('arcjet middleware error:, e');
+    console.error('arcjet middleware error', error);
     res.status(500).json({
       error: 'Internal server error',
       message: 'something went wrong with security middleware',

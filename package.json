@@ -4,14 +4,13 @@
   "type": "module",
   "main": "./src/index.js",
   "scripts": {
+    "start": "node ./src/index.js",
     "dev": "node --watch ./src/index.js",
     "lint": "eslint .",
     "lint:fix": "npx eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio"
+    "dev:docker": "sh ./scripts/dev.sh"
   },
   "repository": {
     "type": "git",
@@ -28,24 +27,23 @@
   "dependencies": {
     "@arcjet/inspect": "^1.5.0",
     "@arcjet/node": "^1.5.0",
-    "@neondatabase/serverless": "^1.1.0",
-    "bcrypt": "^6.0.0",
+    "bcryptjs": "^3.0.3",
     "cookie": "^2.0.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
-    "drizzle-orm": "^0.45.2",
     "express": "^5.2.1",
     "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
     "morgan": "^1.11.0",
     "parser": "^0.1.4",
+    "serverless-http": "^4.0.0",
     "winston": "^3.19.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "drizzle-kit": "^0.31.10",
+    "esbuild": "^0.28.2",
     "eslint": "^10.8.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.6",

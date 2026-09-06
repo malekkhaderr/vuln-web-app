@@ -1,15 +1,8 @@
-#server configuration
 PORT=3000
 NODE_ENV=development
 LOG_LEVEL=info
 
-
-#database configuration
-
-DB_URL=
-
-#Arcjet configuration
+DATABASE_URL=
 
 ARCJET_ENV=development
-
-ARCJET_KEY=ajkey_yourkey
+ARCJET_KEY=
