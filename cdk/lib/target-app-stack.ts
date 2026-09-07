@@ -7,9 +7,15 @@ import { aws_cloudfront_origins as origins } from 'aws-cdk-lib';
 import { aws_lambda_nodejs as lambdaNodejs } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 
+export interface TargetAppStackProps extends cdk.StackProps {
+  readonly webAclArn: string;
+}
+
 export class TargetAppStack extends cdk.Stack {
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+  constructor(scope: Construct, id: string, props: TargetAppStackProps) {
     super(scope, id, props);
+
+    const webAclArn = props.webAclArn;
 
     const targetFunction = new lambdaNodejs.NodejsFunction(
       this,
@@ -45,6 +51,7 @@ export class TargetAppStack extends cdk.Stack {
       this,
       'TargetDistribution',
       {
+        webAclId: props.webAclArn,
         defaultBehavior: {
           origin: new origins.HttpOrigin(apiDomain, {
             protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
