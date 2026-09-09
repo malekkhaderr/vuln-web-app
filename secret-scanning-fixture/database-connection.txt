@@ -1,0 +1,2 @@
+DATABASE_URL=postgresql://fixture_admin:V3ryFakeFixturePassword!@db.example.invalid:5432/secret_scan_demo
+
