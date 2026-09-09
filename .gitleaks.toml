@@ -1,0 +1,45 @@
+title = "Keyper Custom Secret Scanning Configuration"
+
+[allowlist]
+description = "Intentional decoys and scanner configuration"
+
+paths = [
+  '''^\.gitleaks\.toml$''',
+  '''^\.pre-commit-config\.yaml$''',
+  '''^secret-scanning-fixture/decoys\.txt$''',
+  '''^node_modules/''',
+  '''^cdk/node_modules/''',
+  '''^\.env$''',
+  '''^\.env\..*$''',
+]
+
+regexes = [
+  '''AKIA[0-9A-Z]{16}DECOY''',
+  '''sk_test_fake_decoy_[0-9a-zA-Z]{24}''',
+  '''postgres://decoy_user:decoy_pass@localhost''',
+  '''-----BEGIN PRIVATE KEY-----[\s\S]*?DECOY_KEY'''
+]
+
+[[rules]]
+id = "aws-access-key-id"
+description = "Detected AWS Access Key ID"
+regex = '''(?i)(?:aws_access_key_id|aws_key|aws_secret)\s*[:=]\s*["']?(AKIA[0-9A-Z]{16})["']?'''
+keywords = ["akia"]
+
+[[rules]]
+id = "private-key"
+description = "Detected unencrypted private key"
+regex = '''-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----'''
+keywords = ["private key", "-----begin"]
+
+[[rules]]
+id = "database-url"
+description = "Detected database connection string with credentials"
+regex = '''(?i)(?:postgres|postgresql|mysql|mongodb)://[a-zA-Z0-9_]+:[^@\s"']+@[a-zA-Z0-9.-]+:[0-9]+/[a-zA-Z0-9_]+'''
+keywords = ["postgres://", "postgresql://", "mysql://", "mongodb://"]
+
+[[rules]]
+id = "api-token"
+description = "Detected API or bearer token"
+regex = '''(?i)(?:api[_-]?(?:key|token)|auth[_-]?token|bearer)\s*["']?\s*[:=]\s*["']?([a-zA-Z0-9_-]{32,})["']?'''
+keywords = ["api_key", "api-token", "api_token", "auth_token", "bearer"]

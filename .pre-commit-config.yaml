@@ -1,0 +1,10 @@
+repos:
+  - repo: local
+    hooks:
+      - id: gitleaks
+        name: Gitleaks secret scan
+        entry: gitleaks protect --staged --redact --verbose
+        language: system
+        pass_filenames: false
+        stages:
+          - pre-commit
