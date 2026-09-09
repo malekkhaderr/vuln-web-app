@@ -2,7 +2,7 @@
 import * as cdk from 'aws-cdk-lib';
 import { TargetAppStack } from '../lib/target-app-stack';
 import { WafStack } from '../lib/waf-stack';
-
+import { SecurityCiStack } from '../lib/security-ci-check';
 const app = new cdk.App();
 
 // 1. Deploy WAF to us-east-1
@@ -18,4 +18,11 @@ new TargetAppStack(app, 'TargetAppStack', {
   },
   crossRegionReferences: true,
   webAclArn: wafStack.webAclArn,
+});
+
+new SecurityCiStack(app, 'SecurityCiStack', {
+  env: {
+    region: 'eu-west-1', // Change this to your desired region
+  },
+  crossRegionReferences: true,
 });

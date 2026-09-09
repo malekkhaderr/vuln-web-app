@@ -1,0 +1,7 @@
+# These are documentation examples, not credentials.
+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+DATABASE_URL=postgresql://user:password@localhost:5432/example
+API_TOKEN=token-placeholder-for-local-tests
+
+# This is a public placeholder key, not a private key.
+PUBLIC_KEY=ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDemoOnly test@example.invalid
