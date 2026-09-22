@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs';
-import { findUserByEmail } from './vulnerable.service.js';
+import { searchUsersByEmailUnsafe } from './vulnerable.service.js';
 export const hashedPassword = async password => {
   try {
     return await bcrypt.hash(password, 10);
@@ -19,8 +19,7 @@ export const comparePassword = async (password, hashedPassword) => {
 };
 
 export const userExisted = async email => {
-  const user = findUserByEmail(email);
-  return user ? [user] : [];
+  return searchUsersByEmailUnsafe(email);
 };
 
 export const createUser = async () => {

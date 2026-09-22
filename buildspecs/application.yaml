@@ -1,0 +1,29 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 22
+    commands:
+      - echo "[*] Installing dependencies..."
+      - npm ci
+  pre_build:
+    commands:
+      - echo "[*] Logging into Amazon ECR..."
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_REPO_URI
+  build:
+    commands:
+      - echo "[*] Building Docker image..."
+      - docker build -t $ECR_REPO_URI:$CODEBUILD_RESOLVED_COMMIT_ID .
+      - docker tag $ECR_REPO_URI:$CODEBUILD_RESOLVED_COMMIT_ID $ECR_REPO_URI:latest
+  post_build:
+    commands:
+      - echo "[*] Pushing container images to ECR..."
+      - docker push $ECR_REPO_URI:$CODEBUILD_RESOLVED_COMMIT_ID
+      - docker push $ECR_REPO_URI:latest
+      - echo "[*] Application build succeeded."
+      - node scripts/generate-summary.js || true
+
+artifacts:
+  files:
+    - '**/*'
