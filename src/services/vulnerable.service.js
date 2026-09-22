@@ -49,8 +49,9 @@ insertSecret.run(1, 'stripe_api_key', 'sk_test_fake_target_only');
 insertSecret.run(2, 'internal_admin_pw', 'fake-admin-password-only');
 
 export const searchUsersByEmailUnsafe = email => {
+  // const decodedEmail = Buffer.from(email, 'base64').toString('utf8');
   const query = `
-    SELECT id, name, email, role
+    SELECT *
     FROM users
     WHERE email = '${email}'
   `;

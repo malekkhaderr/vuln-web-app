@@ -1,8 +1,4 @@
-PORT=3000
-NODE_ENV=development
-LOG_LEVEL=info
-
-DATABASE_URL=
-
-ARCJET_ENV=development
-ARCJET_KEY=
+NEON_API_KEY=replace-with-local-key
+NEON_PROJECT_ID=example-project
+PARENT_BRANCH_ID=example-branch
+DATABASE_URL=postgres://user:password@localhost:5432/example

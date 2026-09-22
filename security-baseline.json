@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json.schemastore.org/devsecops-baseline-v1.json",
+  "version": "1.0",
+  "policy": {
+    "name": "Keyper App Runner Baseline Policy",
+    "enforcement_mode": "REPORT_ONLY",
+    "fail_on_baseline_increase": true
+  },
+  "rules": {
+    "secrets": {
+      "policy": "ZERO_TOLERANCE",
+      "allowed_count": 0,
+      "description": "No hardcoded credentials, tokens, or private keys allowed under any circumstances."
+    },
+    "dependencies": {
+      "policy": "CVSS_THRESHOLD",
+      "max_allowed_cvss": 7.0,
+      "allowed_severities": {
+        "critical": 0,
+        "high": 0,
+        "medium": 12,
+        "low": 25
+      },
+      "ignore_cves": [
+        {
+          "cve_id": "CVE-2023-45857",
+          "reason": "False positive in dev build dependency; unexploitable in runtime App Runner container",
+          "expires": "2026-12-31"
+        }
+      ]
+    },
+    "sast_semgrep": {
+      "policy": "SEVERITY_THRESHOLD",
+      "allowed_errors": 0,
+      "allowed_warnings": 8,
+      "allowed_info": 20
+    }
+  },
+  "tracked_exceptions_fingerprints": [
+    "gitleaks:fixture-aws-key-hash-12345",
+    "semgrep:src/controllers/vulnerable.controller.js:eval-pattern-001"
+  ]
+}

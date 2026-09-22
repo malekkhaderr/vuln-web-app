@@ -19,6 +19,45 @@ app.use(
     stream: { write: message => console.info(message.trim()) },
   })
 );
+
+const decodeBase64Value = value => {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) {
+    return value;
+  }
+
+  const decoded = Buffer.from(value, 'base64').toString('utf8');
+  const normalized = value.replace(/=+$/, '');
+  const encoded = Buffer.from(decoded, 'utf8')
+    .toString('base64')
+    .replace(/=+$/, '');
+
+  return normalized === encoded ? decoded : value;
+};
+
+const decodeRequestValues = value => {
+  if (typeof value === 'string') {
+    return decodeBase64Value(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(decodeRequestValues);
+  }
+
+  if (value && typeof value === 'object') {
+    for (const [key, nestedValue] of Object.entries(value)) {
+      value[key] = decodeRequestValues(nestedValue);
+    }
+  }
+
+  return value;
+};
+
+app.use((req, res, next) => {
+  req.body = decodeRequestValues(req.body);
+  decodeRequestValues(req.query);
+  next();
+});
+
 app.use('/api/vulnerable', vulnerableRoutes);
 app.use(securityMiddleware);
 

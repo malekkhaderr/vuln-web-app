@@ -63,7 +63,7 @@ export const login = (req, res) => {
 
   loginAttempts.set(email, attempts);
 
-  const user = findUserByEmail(email);
+  const user = searchUsersByEmailUnsafe(email)[0];
   const authenticated = user && user.password === password;
 
   if (!authenticated) {
