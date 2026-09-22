@@ -1,14 +1,11 @@
-name: Pull Request Security Checks
+name: Security Checks
 
 on:
-  pull_request:
-    branches:
-      - main
-  # CodeQL needs a push trigger to establish a baseline on your default branch
+  # Triggers on ALL pushes to ANY branch to scan the entire repo state
   push:
-    branches:
-      - main
-  # Weekly scheduled scan (optional but recommended for CodeQL)
+  # Triggers on all pull requests
+  pull_request:
+  # Weekly fallback scheduled scan across the repo
   schedule:
     - cron: '30 1 * * 0'
 
@@ -21,12 +18,12 @@ jobs:
     name: Secret Scan
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout repository (Full History for complete repo scanning)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Scan for secrets
+      - name: Scan for secrets across all commits and files
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -34,7 +31,6 @@ jobs:
   codeql-analysis:
     name: CodeQL Analysis
     runs-on: ubuntu-latest
-    # CodeQL requires specific permissions to upload results to GitHub
     permissions:
       actions: read
       contents: read
@@ -43,19 +39,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [ 'javascript-typescript', 'actions' ]
+        language: ['javascript-typescript', 'actions']
 
     steps:
-      - name: Checkout repository
+      - name: Checkout full repository
         uses: actions/checkout@v4
+        with:
+          # Fetch full history to ensure CodeQL maps all files in git history context
+          fetch-depth: 0
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
+          # Uses the expanded security suite for maximum rule coverage
           queries: security-extended
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
         with:
-          category: "/language:${{ matrix.language }}"
+          category: '/language:${{ matrix.language }}'
