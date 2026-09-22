@@ -4,7 +4,15 @@ on:
   pull_request:
     branches:
       - main
+  # CodeQL needs a push trigger to establish a baseline on your default branch
+  push:
+    branches:
+      - main
+  # Weekly scheduled scan (optional but recommended for CodeQL)
+  schedule:
+    - cron: '30 1 * * 0'
 
+# Global permissions
 permissions:
   contents: read
 
@@ -12,7 +20,6 @@ jobs:
   secret-scan:
     name: Secret Scan
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -24,21 +31,31 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  sast:
-    name: SAST
+  codeql-analysis:
+    name: CodeQL Analysis
     runs-on: ubuntu-latest
+    # CodeQL requires specific permissions to upload results to GitHub
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'javascript-typescript', 'actions' ]
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
         with:
-          python-version: '3.12'
+          languages: ${{ matrix.language }}
+          queries: security-extended
 
-      - name: Install Semgrep
-        run: python -m pip install semgrep
-
-      - name: Scan entire repository
-        run: semgrep scan --config auto --error --verbose .
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
