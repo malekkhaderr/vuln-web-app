@@ -57,13 +57,6 @@ jobs:
         uses: github/codeql-action/analyze@v3
         with:
           category: '/language:${{ matrix.language }}'
-
-      - name: Upload SARIF as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: codeql-results-${{ matrix.language }}
-          path: ../results/*.sarif
-
   dependency-scan:
     name: Dependency Scan
     runs-on: ubuntu-latest
