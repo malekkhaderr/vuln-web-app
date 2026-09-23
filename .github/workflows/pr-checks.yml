@@ -67,7 +67,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Scan repository with Trivy
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: fs
           scan-ref: .
@@ -111,25 +111,25 @@ jobs:
       - name: Scan synthesized CloudFormation
         run: checkov -d cdk/cdk.out --framework cloudformation --quiet
 
-code-quality:
-  name: Lint and Format
-  runs-on: ubuntu-latest
+  code-quality:
+    name: Lint and Format
+    runs-on: ubuntu-latest
 
-  steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: 22
-        cache: npm
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
 
-    - name: Install dependencies
-      run: npm ci
+      - name: Install dependencies
+        run: npm ci
 
-    - name: Check formatting
-      run: npm run format:check
+      - name: Check formatting
+        run: npm run format:check
 
-    - name: Run ESLint
-      run: npm run lint
+      - name: Run ESLint
+        run: npm run lint
