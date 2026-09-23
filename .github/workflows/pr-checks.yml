@@ -1,15 +1,11 @@
 name: Security Checks
 
 on:
-  # Triggers on ALL pushes to ANY branch to scan the entire repo state
   push:
-  # Triggers on all pull requests
   pull_request:
-  # Weekly fallback scheduled scan across the repo
   schedule:
     - cron: '30 1 * * 0'
 
-# Global permissions
 permissions:
   contents: read
 
@@ -17,13 +13,14 @@ jobs:
   secret-scan:
     name: Secret Scan
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository (Full History for complete repo scanning)
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Scan for secrets across all commits and files
+      - name: Scan for secrets
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -31,6 +28,7 @@ jobs:
   codeql-analysis:
     name: CodeQL Analysis
     runs-on: ubuntu-latest
+
     permissions:
       actions: read
       contents: read
@@ -39,23 +37,47 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: ['javascript-typescript', 'actions']
+        language:
+          - javascript-typescript
+          - actions
 
     steps:
-      - name: Checkout full repository
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # Fetch full history to ensure CodeQL maps all files in git history context
           fetch-depth: 0
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
-          # Uses the expanded security suite for maximum rule coverage
           queries: security-extended
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
         with:
           category: '/language:${{ matrix.language }}'
+
+      - name: Upload SARIF as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-results-${{ matrix.language }}
+          path: ../results/*.sarif
+
+  dependency-scan:
+    name: Dependency Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Scan repository with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: 1
