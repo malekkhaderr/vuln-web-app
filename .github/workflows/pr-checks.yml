@@ -57,6 +57,7 @@ jobs:
         uses: github/codeql-action/analyze@v3
         with:
           category: '/language:${{ matrix.language }}'
+
   dependency-scan:
     name: Dependency Scan
     runs-on: ubuntu-latest
@@ -74,31 +75,32 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: 1
-cdk-synth:
-  name: CDK Synthesis
-  runs-on: ubuntu-latest
 
-  steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+  cdk-synth:
+    name: CDK Synthesis
+    runs-on: ubuntu-latest
 
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: 22
-        cache: npm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Install application dependencies
-      run: npm ci
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
 
-    - name: Install CDK dependencies
-      run: npm ci
-      working-directory: cdk
+      - name: Install application dependencies
+        run: npm ci
 
-    - name: Synthesize CDK
-      working-directory: cdk
-      env:
-        CDK_DEFAULT_ACCOUNT: '000000000000'
-        CDK_DEFAULT_REGION: eu-west-1
-        WEB_ACL_ARN: arn:aws:wafv2:us-east-1:000000000000:global/webacl/ci-placeholder/ci-placeholder
-      run: npx cdk synth --app "npx tsx bin/target-app.ts"
+      - name: Install CDK dependencies
+        run: npm ci
+        working-directory: cdk
+
+      - name: Synthesize CDK
+        working-directory: cdk
+        env:
+          CDK_DEFAULT_ACCOUNT: '000000000000'
+          CDK_DEFAULT_REGION: eu-west-1
+          WEB_ACL_ARN: arn:aws:wafv2:us-east-1:000000000000:global/webacl/ci-placeholder/ci-placeholder
+        run: npx cdk synth --app "npx tsx bin/target-app.ts"
