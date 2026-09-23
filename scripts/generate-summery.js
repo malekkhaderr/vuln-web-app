@@ -89,7 +89,7 @@ console.log(
   '----------------------------------------------------------------------'
 );
 console.log(
-  `  %-15s | %-10s | %-10s | %-10s`,
+  '  %-15s | %-10s | %-10s | %-10s',
   'SCANNER',
   'FINDINGS',
   'BASELINE',
@@ -99,21 +99,21 @@ console.log(
   '----------------------------------------------------------------------'
 );
 console.log(
-  `  %-15s | %-10d | %-10d | %-10s`,
+  '  %-15s | %-10d | %-10d | %-10s',
   'Gitleaks',
   gitleaksCount,
   gitleaksBase,
   gStatus
 );
 console.log(
-  `  %-15s | %-10d | %-10d | %-10s`,
+  '  %-15s | %-10d | %-10d | %-10s',
   'npm audit',
   depsCount,
   depsBase,
   dStatus
 );
 console.log(
-  `  %-15s | %-10d | %-10d | %-10s`,
+  '  %-15s | %-10d | %-10d | %-10s',
   'Semgrep',
   semgrepCount,
   semgrepBase,
