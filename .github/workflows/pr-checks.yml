@@ -165,3 +165,9 @@ jobs:
         uses: advanced-security/security-report-action@main
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload PDF Report as Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-summary-report
+          path: summary.pdf
