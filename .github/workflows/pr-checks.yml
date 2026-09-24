@@ -105,7 +105,7 @@ jobs:
 
       - name: Upload CodeQL report
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: report-codeql-${{ matrix.language }}
           path: sarif-results/
@@ -154,7 +154,7 @@ jobs:
 
       - name: Upload Trivy report
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: report-trivy
           path: trivy-report.txt
@@ -247,7 +247,7 @@ jobs:
 
       - name: Upload Checkov report
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: report-checkov
           path: checkov-report.json
@@ -330,7 +330,7 @@ jobs:
 
       - name: Upload lint report
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: report-lint
           path: |
@@ -341,6 +341,126 @@ jobs:
       - name: Enforce lint result
         if: steps.format.outcome == 'failure' || steps.eslint.outcome == 'failure'
         run: exit 1
+
+  pr-comment:
+    name: Post Security Report to PR
+    runs-on: ubuntu-latest
+    if: always() && github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    needs:
+      - secret-scan
+      - codeql-analysis
+      - dependency-scan
+      - cdk-synth
+      - code-quality
+    steps:
+      - name: Download security reports
+        uses: actions/download-artifact@v8
+        with:
+          pattern: report-*
+          path: reports
+          merge-multiple: false
+
+      - name: Build PR comment
+        env:
+          R_SECRETS: ${{ needs.secret-scan.result }}
+          R_CODEQL: ${{ needs.codeql-analysis.result }}
+          R_DEPS: ${{ needs.dependency-scan.result }}
+          R_CDK: ${{ needs.cdk-synth.result }}
+          R_QUALITY: ${{ needs.code-quality.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -u
+
+          icon() {
+            case "$1" in
+              success) echo "✅ passed" ;;
+              failure) echo "❌ failed" ;;
+              cancelled) echo "🟡 cancelled" ;;
+              skipped) echo "⚪ skipped" ;;
+              *) echo "⚪ $1" ;;
+            esac
+          }
+
+          {
+            echo "## 🔐 Security Checks"
+            echo
+            echo "| Check | Result |"
+            echo "|---|---|"
+            echo "| Gitleaks | $(icon "$R_SECRETS") |"
+            echo "| CodeQL | $(icon "$R_CODEQL") |"
+            echo "| Trivy | $(icon "$R_DEPS") |"
+            echo "| CDK / Checkov | $(icon "$R_CDK") |"
+            echo "| Lint / Prettier | $(icon "$R_QUALITY") |"
+
+            echo
+            echo "### Findings"
+
+            # CodeQL counts are small and safe to include in a PR comment.
+            codeql_files=(reports/report-codeql-*/*.sarif)
+            have_codeql=false
+            if [ -e "${codeql_files[0]}" ]; then
+              for f in "${codeql_files[@]}"; do
+                have_codeql=true
+                total=$(jq '[.runs[].results[]?] | length' "$f")
+                echo "- CodeQL ($(basename "$(dirname "$f")")): **$total** finding(s)"
+              done
+            fi
+            if [ "$have_codeql" = false ]; then
+              echo "- CodeQL: report unavailable"
+            fi
+
+            # Trivy report is intentionally capped so the GitHub PR comment
+            # stays small. The complete report remains in the artifact.
+            if [ -s reports/report-trivy/trivy-report.txt ]; then
+              echo
+              echo "<details>"
+              echo "<summary>Trivy details (first 12 KB)</summary>"
+              echo
+              echo '```text'
+              head -c 12000 reports/report-trivy/trivy-report.txt
+              echo
+              echo '```'
+              echo
+              echo "</details>"
+            fi
+
+            if [ -s reports/report-checkov/checkov-report.json ]; then
+              failed=$(jq '.results.failed_checks // [] | length' reports/report-checkov/checkov-report.json)
+              passed=$(jq '.summary.passed // 0' reports/report-checkov/checkov-report.json)
+              skipped=$(jq '.summary.skipped // 0' reports/report-checkov/checkov-report.json)
+              echo "- Checkov: **$failed** failed, **$passed** passed, **$skipped** skipped"
+            fi
+
+            if [ -s reports/report-lint/eslint-report.json ]; then
+              eslint_count=$(jq '[.[].messages[]] | length' reports/report-lint/eslint-report.json)
+              echo "- ESLint: **$eslint_count** finding(s)"
+            fi
+
+            echo
+            echo "📄 [Open the full workflow run]($RUN_URL) — detailed reports are also stored as workflow artifacts."
+          } > pr-comment.md
+
+          # Defensive size guard: keep the comment comfortably below GitHub's
+          # comment-body limits even if a scanner emits unexpected output.
+          max_bytes=50000
+          if [ "$(wc -c < pr-comment.md)" -gt "$max_bytes" ]; then
+            head -c "$max_bytes" pr-comment.md > pr-comment.tmp
+            mv pr-comment.tmp pr-comment.md
+            printf '\n\n> Report truncated in the PR comment. See the workflow artifacts for the full report.\n' >> pr-comment.md
+          fi
+
+          echo "PR comment size: $(wc -c < pr-comment.md) bytes"
+
+      - name: Post combined security report to pull request
+        uses: marocchino/sticky-pull-request-comment@v3
+        with:
+          GITHUB_TOKEN: ${{ github.token }}
+          header: security-report
+          path: pr-comment.md
 
   report:
     name: Security Report
@@ -363,7 +483,7 @@ jobs:
     steps:
       - name: Download all reports
         if: always()
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: report-*
           path: reports
@@ -473,21 +593,13 @@ jobs:
 
       - name: Upload combined report
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: security-report
           path: |
             security-report.md
             reports/
           if-no-files-found: error
-
-      - name: Post combined report to pull request
-        if: always() && github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@v3
-        with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          header: security-report
-          path: security-report.md
 
       - name: Configure AWS credentials for email
         if: always() && env.AWS_SNS_TOPIC_ARN != '' && env.AWS_REPORT_ROLE_ARN != ''
