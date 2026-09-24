@@ -15,6 +15,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Secret scan (Gitleaks)
+  # ---------------------------------------------------------------------------
   secret-scan:
     name: Secret Scan (Gitleaks)
     runs-on: ubuntu-latest
@@ -36,6 +39,9 @@ jobs:
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'true'
           GITLEAKS_ENABLE_COMMENTS: ${{ github.event_name == 'pull_request' }}
 
+  # ---------------------------------------------------------------------------
+  # 2. CodeQL (SAST)
+  # ---------------------------------------------------------------------------
   codeql-analysis:
     name: CodeQL Analysis (${{ matrix.language }})
     runs-on: ubuntu-latest
@@ -68,6 +74,9 @@ jobs:
         with:
           category: '/language:${{ matrix.language }}'
 
+  # ---------------------------------------------------------------------------
+  # 3. Dependency scan (Trivy)
+  # ---------------------------------------------------------------------------
   dependency-scan:
     name: Dependency Scan (Trivy)
     runs-on: ubuntu-latest
@@ -79,15 +88,50 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Scan repository with Trivy
-        uses: aquasecurity/trivy-action@v0.36.0
+        id: trivy
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@v0.30.0
         with:
           scan-type: fs
           scan-ref: .
           scanners: vuln,secret
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+          format: table
+          output: trivy-report.txt
           exit-code: '1'
 
+      - name: Publish Trivy Step Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## 📦 Trivy Dependency Scan"
+            echo "Result: **${{ steps.trivy.outcome }}**"
+            echo
+            echo '```text'
+            if [ -s trivy-report.txt ]; then
+              head -c 100000 trivy-report.txt
+            else
+              echo "No HIGH/CRITICAL findings detected."
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Trivy Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-trivy
+          path: trivy-report.txt
+
+      - name: Enforce Trivy result
+        if: steps.trivy.outcome == 'failure'
+        run: exit 1
+
+  # ---------------------------------------------------------------------------
+  # 4. CDK Synth + Checkov (IaC)
+  # ---------------------------------------------------------------------------
   cdk-synth:
     name: CDK Synthesis + Checkov
     runs-on: ubuntu-latest
@@ -112,6 +156,8 @@ jobs:
         run: npm ci
 
       - name: Synthesize CDK
+        id: synth
+        continue-on-error: true
         working-directory: cdk
         env:
           CDK_DEFAULT_ACCOUNT: '000000000000'
@@ -120,11 +166,55 @@ jobs:
         run: npx cdk synth --app "npx tsx bin/target-app.ts"
 
       - name: Install Checkov
+        if: steps.synth.outcome == 'success'
         run: python -m pip install checkov
 
       - name: Scan synthesized CloudFormation with Checkov
-        run: checkov -d cdk/cdk.out --framework cloudformation --quiet
+        id: checkov
+        if: steps.synth.outcome == 'success'
+        continue-on-error: true
+        run: |
+          checkov \
+            -d cdk/cdk.out \
+            --framework cloudformation \
+            --output json \
+            --output-file-path checkov-report.json
 
+      - name: Publish Checkov Step Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## 🏗️ CDK Synthesis & Checkov"
+            echo "- CDK synth: **${{ steps.synth.outcome }}**"
+            echo "- Checkov: **${{ steps.checkov.outcome }}**"
+            echo
+            if [ -s checkov-report.json ]; then
+              failed=$(jq '.results.failed_checks // [] | length' checkov-report.json)
+              passed=$(jq '.summary.passed // 0' checkov-report.json)
+              skipped=$(jq '.summary.skipped // 0' checkov-report.json)
+              echo "| Metric | Count |"
+              echo "|---|---:|"
+              echo "| Failed | $failed |"
+              echo "| Passed | $passed |"
+              echo "| Skipped | $skipped |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Checkov Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-checkov
+          path: checkov-report.json
+
+      - name: Enforce CDK / Checkov result
+        if: steps.synth.outcome == 'failure' || steps.checkov.outcome == 'failure'
+        run: exit 1
+
+  # ---------------------------------------------------------------------------
+  # 5. Lint and Format
+  # ---------------------------------------------------------------------------
   code-quality:
     name: Lint and Format
     runs-on: ubuntu-latest
@@ -145,7 +235,103 @@ jobs:
         run: npm ci
 
       - name: Check formatting
+        id: format
+        continue-on-error: true
         run: npm run format:check
 
       - name: Run ESLint
-        run: npm run lint
+        id: eslint
+        continue-on-error: true
+        run: npm run lint -- -f json -o eslint-report.json
+
+      - name: Publish Lint Step Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## 🧹 Code Quality"
+            echo "- Prettier: **${{ steps.format.outcome }}**"
+            echo "- ESLint: **${{ steps.eslint.outcome }}**"
+            if [ -s eslint-report.json ]; then
+              count=$(jq '[.[].messages[]] | length' eslint-report.json)
+              echo "- ESLint issues: **$count**"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Lint Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-lint
+          path: eslint-report.json
+
+      - name: Enforce lint result
+        if: steps.format.outcome == 'failure' || steps.eslint.outcome == 'failure'
+        run: exit 1
+
+  # ---------------------------------------------------------------------------
+  # 6. PR Sticky Comment Aggregator
+  # ---------------------------------------------------------------------------
+  pr-report:
+    name: Post PR Security Comment
+    runs-on: ubuntu-latest
+    if: always() && github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    needs:
+      - secret-scan
+      - codeql-analysis
+      - dependency-scan
+      - cdk-synth
+      - code-quality
+
+    steps:
+      - name: Download Security Reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: report-*
+          path: reports
+          merge-multiple: false
+
+      - name: Build Markdown PR Comment
+        env:
+          R_SECRETS: ${{ needs.secret-scan.result }}
+          R_CODEQL: ${{ needs.codeql-analysis.result }}
+          R_DEPS: ${{ needs.dependency-scan.result }}
+          R_CDK: ${{ needs.cdk-synth.result }}
+          R_QUALITY: ${{ needs.code-quality.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          icon() {
+            case "$1" in
+              success) echo "✅ Passed" ;;
+              failure) echo "❌ Failed" ;;
+              cancelled) echo "🟡 Cancelled" ;;
+              skipped) echo "⚪ Skipped" ;;
+              *) echo "⚪ $1" ;;
+            esac
+          }
+
+          {
+            echo "## 🛡️ Security Checks Overview"
+            echo
+            echo "| Check Category | Engine / Tool | Result |"
+            echo "| :--- | :--- | :--- |"
+            echo "| Secret Leak Detection | Gitleaks | $(icon "$R_SECRETS") |"
+            echo "| Static Code Analysis (SAST) | CodeQL | $(icon "$R_CODEQL") |"
+            echo "| Dependency Vulnerabilities | Trivy | $(icon "$R_DEPS") |"
+            echo "| IaC & Cloud Security | Checkov | $(icon "$R_CDK") |"
+            echo "| Code Formatting & Linting | Prettier / ESLint | $(icon "$R_QUALITY") |"
+            echo
+            echo "---"
+            echo "📄 [View full run details & logs]($RUN_URL)"
+          } > pr-comment.md
+
+      - name: Post or Update PR Sticky Comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          header: security-audit-report
+          path: pr-comment.md
