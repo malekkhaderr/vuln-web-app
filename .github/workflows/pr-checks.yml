@@ -34,7 +34,7 @@ jobs:
 
       - name: Run Gitleaks Scan
         run: |
-          gitleaks detect --config .gitleaks.toml --verbose --report-format json --report-path local-gitleaks-report.json
+          gitleaks detect --config .gitleaks.toml --verbose --report-format json --report-path gitleaks-report.json
 
       - name: Upload Gitleaks Report Artifact
         if: always()  # <--- Ensures artifact uploads even when leaks fail the build!
