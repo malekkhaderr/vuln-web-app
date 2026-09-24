@@ -169,7 +169,6 @@ jobs:
       - codeql-analysis
       - dependency-scan
       - cdk-synth
-      - code-quality
     permissions:
       pull-requests: write
 
