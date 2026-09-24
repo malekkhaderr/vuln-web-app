@@ -23,12 +23,12 @@ jobs:
       pull-requests: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Scan for secrets
-        uses: gitleaks/gitleaks-action@v3
+        uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
@@ -43,138 +43,63 @@ jobs:
       actions: read
       contents: read
       security-events: write
+
     strategy:
       fail-fast: false
       matrix:
         language:
           - javascript-typescript
           - actions
+
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
           queries: security-extended
 
       - name: Analyze with CodeQL
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@v3
         with:
-          category: /language:${{ matrix.language }}
-          output: sarif-results
-          upload: always
-
-      - name: Summarize CodeQL results
-        if: always()
-        shell: bash
-        run: |
-          set -u
-          {
-            echo "## CodeQL (${{ matrix.language }})"
-            files=(sarif-results/*.sarif)
-
-            if [ ! -e "${files[0]}" ]; then
-              echo "No SARIF file was produced."
-              exit 0
-            fi
-
-            for f in "${files[@]}"; do
-              total=$(jq '[.runs[].results[]?] | length' "$f")
-              echo "Findings: **$total**"
-
-              if [ "$total" -gt 0 ]; then
-                echo
-                echo "| Rule | Level | Location |"
-                echo "|---|---|---|"
-                jq -r '
-                  [.runs[].results[]?][:50][] |
-                  "| \(.ruleId // "-") | \(.level // "warning") | \(.locations[0].physicalLocation.artifactLocation.uri // "-"):\(.locations[0].physicalLocation.region.startLine // "-") |"
-                ' "$f"
-
-                if [ "$total" -gt 50 ]; then
-                  echo
-                  echo "_Showing first 50 of $total findings. See the artifact or Security tab for all._"
-                fi
-              fi
-            done
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload CodeQL report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: report-codeql-${{ matrix.language }}
-          path: sarif-results/
-          if-no-files-found: warn
+          category: '/language:${{ matrix.language }}'
 
   dependency-scan:
     name: Dependency Scan (Trivy)
     runs-on: ubuntu-latest
     permissions:
       contents: read
+
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Scan repository with Trivy
-        id: trivy
-        continue-on-error: true
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@v0.28.0
         with:
           scan-type: fs
           scan-ref: .
           scanners: vuln,secret
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-          format: table
-          output: trivy-report.txt
           exit-code: '1'
-
-      - name: Publish Trivy report
-        if: always()
-        shell: bash
-        run: |
-          {
-            echo "## Trivy"
-            echo "Result: **${{ steps.trivy.outcome }}**"
-            echo
-            echo '```text'
-            if [ -s trivy-report.txt ]; then
-              head -c 500000 trivy-report.txt
-            else
-              echo "No HIGH/CRITICAL findings (or no report was generated)."
-            fi
-            echo
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload Trivy report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: report-trivy
-          path: trivy-report.txt
-          if-no-files-found: warn
-
-      - name: Enforce Trivy result
-        if: steps.trivy.outcome == 'failure'
-        run: exit 1
 
   cdk-synth:
     name: CDK Synthesis + Checkov
     runs-on: ubuntu-latest
     permissions:
       contents: read
+
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
@@ -187,8 +112,6 @@ jobs:
         run: npm ci
 
       - name: Synthesize CDK
-        id: synth
-        continue-on-error: true
         working-directory: cdk
         env:
           CDK_DEFAULT_ACCOUNT: '000000000000'
@@ -196,78 +119,24 @@ jobs:
           WEB_ACL_ARN: arn:aws:wafv2:us-east-1:000000000000:global/webacl/ci-placeholder/ci-placeholder
         run: npx cdk synth --app "npx tsx bin/target-app.ts"
 
-      - name: Set up Python
-        if: steps.synth.outcome == 'success'
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
       - name: Install Checkov
-        if: steps.synth.outcome == 'success'
-        run: python -m pip install --disable-pip-version-check checkov
+        run: python -m pip install checkov
 
       - name: Scan synthesized CloudFormation with Checkov
-        id: checkov
-        if: steps.synth.outcome == 'success'
-        continue-on-error: true
-        run: |
-          checkov \
-            -d cdk/cdk.out \
-            --framework cloudformation \
-            --output cli \
-            --output json \
-            --output-file-path console,checkov-report.json
-
-      - name: Publish CDK / Checkov report
-        if: always()
-        shell: bash
-        run: |
-          {
-            echo "## CDK Synthesis and Checkov"
-            echo "- CDK synth: **${{ steps.synth.outcome }}**"
-            echo "- Checkov: **${{ steps.checkov.outcome }}**"
-            echo
-
-            if [ "${{ steps.synth.outcome }}" != "success" ]; then
-              echo "CDK synthesis failed, so Checkov did not run. See the job log for details."
-            elif [ -s checkov-report.json ]; then
-              failed=$(jq '.results.failed_checks // [] | length' checkov-report.json)
-              passed=$(jq '.summary.passed // 0' checkov-report.json)
-              skipped=$(jq '.summary.skipped // 0' checkov-report.json)
-
-              echo "| Checkov metric | Count |"
-              echo "|---|---:|"
-              echo "| Failed | $failed |"
-              echo "| Passed | $passed |"
-              echo "| Skipped | $skipped |"
-            else
-              echo "No Checkov JSON report was produced."
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload Checkov report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: report-checkov
-          path: checkov-report.json
-          if-no-files-found: warn
-
-      - name: Enforce CDK / Checkov result
-        if: steps.synth.outcome == 'failure' || steps.checkov.outcome == 'failure'
-        run: exit 1
+        run: checkov -d cdk/cdk.out --framework cloudformation --quiet
 
   code-quality:
     name: Lint and Format
     runs-on: ubuntu-latest
     permissions:
       contents: read
+
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
@@ -276,346 +145,7 @@ jobs:
         run: npm ci
 
       - name: Check formatting
-        id: format
-        continue-on-error: true
-        shell: bash
-        run: |
-          npm run format:check 2>&1 | tee format-report.txt
-          exit "${PIPESTATUS[0]}"
+        run: npm run format:check
 
       - name: Run ESLint
-        id: eslint
-        continue-on-error: true
-        shell: bash
-        run: npm run lint -- -f json -o eslint-report.json
-
-      - name: Publish lint report
-        if: always()
-        shell: bash
-        run: |
-          {
-            echo "## Lint and Format"
-            echo "- Prettier: **${{ steps.format.outcome }}**"
-            echo "- ESLint: **${{ steps.eslint.outcome }}**"
-
-            if [ -s eslint-report.json ]; then
-              count=$(jq '[.[].messages[]] | length' eslint-report.json)
-              echo "- ESLint findings: **$count**"
-
-              if [ "$count" -gt 0 ]; then
-                echo
-                echo "| File | Line | Rule | Message |"
-                echo "|---|---:|---|---|"
-                jq -r --arg ws "$GITHUB_WORKSPACE/" '
-                  [.[] | select(.messages | length > 0) | .filePath as $f | .messages[]
-                  | "| \($f | sub($ws; "")) | \(.line // "-") | \(.ruleId // "-") | \(.message | gsub("[|\n]"; " ")) |"][:100][]
-                ' eslint-report.json
-
-                if [ "$count" -gt 100 ]; then
-                  echo
-                  echo "_Showing first 100 of $count findings. See the artifact for all._"
-                fi
-              fi
-            fi
-
-            if [ "${{ steps.format.outcome }}" = "failure" ] && [ -s format-report.txt ]; then
-              echo
-              echo "**Prettier output**"
-              echo '```text'
-              head -c 100000 format-report.txt
-              echo
-              echo '```'
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload lint report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: report-lint
-          path: |
-            eslint-report.json
-            format-report.txt
-          if-no-files-found: warn
-
-      - name: Enforce lint result
-        if: steps.format.outcome == 'failure' || steps.eslint.outcome == 'failure'
-        run: exit 1
-
-  pr-comment:
-    name: Post Security Report to PR
-    runs-on: ubuntu-latest
-    if: always() && github.event_name == 'pull_request'
-    permissions:
-      contents: read
-      pull-requests: write
-    needs:
-      - secret-scan
-      - codeql-analysis
-      - dependency-scan
-      - cdk-synth
-      - code-quality
-    steps:
-      - name: Download security reports
-        uses: actions/download-artifact@v8
-        with:
-          pattern: report-*
-          path: reports
-          merge-multiple: false
-
-      - name: Build PR comment
-        env:
-          R_SECRETS: ${{ needs.secret-scan.result }}
-          R_CODEQL: ${{ needs.codeql-analysis.result }}
-          R_DEPS: ${{ needs.dependency-scan.result }}
-          R_CDK: ${{ needs.cdk-synth.result }}
-          R_QUALITY: ${{ needs.code-quality.result }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        shell: bash
-        run: |
-          set -u
-
-          icon() {
-            case "$1" in
-              success) echo "✅ passed" ;;
-              failure) echo "❌ failed" ;;
-              cancelled) echo "🟡 cancelled" ;;
-              skipped) echo "⚪ skipped" ;;
-              *) echo "⚪ $1" ;;
-            esac
-          }
-
-          {
-            echo "## 🔐 Security Checks"
-            echo
-            echo "| Check | Result |"
-            echo "|---|---|"
-            echo "| Gitleaks | $(icon "$R_SECRETS") |"
-            echo "| CodeQL | $(icon "$R_CODEQL") |"
-            echo "| Trivy | $(icon "$R_DEPS") |"
-            echo "| CDK / Checkov | $(icon "$R_CDK") |"
-            echo "| Lint / Prettier | $(icon "$R_QUALITY") |"
-
-            echo
-            echo "### Findings"
-
-            # CodeQL counts are small and safe to include in a PR comment.
-            codeql_files=(reports/report-codeql-*/*.sarif)
-            have_codeql=false
-            if [ -e "${codeql_files[0]}" ]; then
-              for f in "${codeql_files[@]}"; do
-                have_codeql=true
-                total=$(jq '[.runs[].results[]?] | length' "$f")
-                echo "- CodeQL ($(basename "$(dirname "$f")")): **$total** finding(s)"
-              done
-            fi
-            if [ "$have_codeql" = false ]; then
-              echo "- CodeQL: report unavailable"
-            fi
-
-            # Trivy report is intentionally capped so the GitHub PR comment
-            # stays small. The complete report remains in the artifact.
-            if [ -s reports/report-trivy/trivy-report.txt ]; then
-              echo
-              echo "<details>"
-              echo "<summary>Trivy details (first 12 KB)</summary>"
-              echo
-              echo '```text'
-              head -c 12000 reports/report-trivy/trivy-report.txt
-              echo
-              echo '```'
-              echo
-              echo "</details>"
-            fi
-
-            if [ -s reports/report-checkov/checkov-report.json ]; then
-              failed=$(jq '.results.failed_checks // [] | length' reports/report-checkov/checkov-report.json)
-              passed=$(jq '.summary.passed // 0' reports/report-checkov/checkov-report.json)
-              skipped=$(jq '.summary.skipped // 0' reports/report-checkov/checkov-report.json)
-              echo "- Checkov: **$failed** failed, **$passed** passed, **$skipped** skipped"
-            fi
-
-            if [ -s reports/report-lint/eslint-report.json ]; then
-              eslint_count=$(jq '[.[].messages[]] | length' reports/report-lint/eslint-report.json)
-              echo "- ESLint: **$eslint_count** finding(s)"
-            fi
-
-            echo
-            echo "📄 [Open the full workflow run]($RUN_URL) — detailed reports are also stored as workflow artifacts."
-          } > pr-comment.md
-
-          # Defensive size guard: keep the comment comfortably below GitHub's
-          # comment-body limits even if a scanner emits unexpected output.
-          max_bytes=50000
-          if [ "$(wc -c < pr-comment.md)" -gt "$max_bytes" ]; then
-            head -c "$max_bytes" pr-comment.md > pr-comment.tmp
-            mv pr-comment.tmp pr-comment.md
-            printf '\n\n> Report truncated in the PR comment. See the workflow artifacts for the full report.\n' >> pr-comment.md
-          fi
-
-          echo "PR comment size: $(wc -c < pr-comment.md) bytes"
-
-      - name: Post combined security report to pull request
-        uses: marocchino/sticky-pull-request-comment@v3
-        with:
-          GITHUB_TOKEN: ${{ github.token }}
-          header: security-report
-          path: pr-comment.md
-
-  report:
-    name: Security Report
-    runs-on: ubuntu-latest
-    if: always()
-    permissions:
-      contents: read
-      pull-requests: write
-      id-token: write
-    needs:
-      - secret-scan
-      - codeql-analysis
-      - dependency-scan
-      - cdk-synth
-      - code-quality
-    env:
-      AWS_SNS_TOPIC_ARN: ${{ secrets.AWS_SNS_TOPIC_ARN }}
-      AWS_REPORT_ROLE_ARN: ${{ secrets.AWS_REPORT_ROLE_ARN }}
-      AWS_REPORT_REGION: ${{ vars.AWS_REPORT_REGION || 'eu-west-1' }}
-    steps:
-      - name: Download all reports
-        if: always()
-        uses: actions/download-artifact@v8
-        with:
-          pattern: report-*
-          path: reports
-          merge-multiple: false
-
-      - name: Build combined report
-        if: always()
-        env:
-          R_SECRETS: ${{ needs.secret-scan.result }}
-          R_CODEQL: ${{ needs.codeql-analysis.result }}
-          R_DEPS: ${{ needs.dependency-scan.result }}
-          R_CDK: ${{ needs.cdk-synth.result }}
-          R_QUALITY: ${{ needs.code-quality.result }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        shell: bash
-        run: |
-          set -u
-
-          icon() {
-            case "$1" in
-              success) echo "✅ passed" ;;
-              failure) echo "❌ failed" ;;
-              cancelled) echo "🟡 cancelled" ;;
-              skipped) echo "⚪ skipped" ;;
-              *) echo "⚪ $1" ;;
-            esac
-          }
-
-          {
-            echo "# Security Checks Report"
-            echo
-            echo "- **Repository:** $GITHUB_REPOSITORY"
-            echo "- **Ref:** \`$GITHUB_REF_NAME\` @ \`${GITHUB_SHA::7}\`"
-            echo "- **Trigger:** $GITHUB_EVENT_NAME"
-            echo "- **Run:** $RUN_URL"
-            echo
-            echo "## Overview"
-            echo
-            echo "| Check | Result |"
-            echo "|---|---|"
-            echo "| Secret scan (Gitleaks) | $(icon "$R_SECRETS") |"
-            echo "| CodeQL | $(icon "$R_CODEQL") |"
-            echo "| Dependency scan (Trivy) | $(icon "$R_DEPS") |"
-            echo "| CDK synth + Checkov | $(icon "$R_CDK") |"
-            echo "| Lint and format | $(icon "$R_QUALITY") |"
-
-            echo
-            echo "## CodeQL results"
-            echo
-            codeql_files=(reports/report-codeql-*/*.sarif)
-            found_codeql=false
-            if [ -e "${codeql_files[0]}" ]; then
-              echo "| Report | Findings |"
-              echo "|---|---:|"
-              for f in "${codeql_files[@]}"; do
-                found_codeql=true
-                total=$(jq '[.runs[].results[]?] | length' "$f")
-                echo "| $(basename "$(dirname "$f")") | $total |"
-              done
-            fi
-            if [ "$found_codeql" = false ]; then
-              echo "No CodeQL SARIF report was produced."
-            fi
-
-            echo
-            echo "## Trivy results"
-            echo
-            if [ -s reports/report-trivy/trivy-report.txt ]; then
-              echo '```text'
-              head -c 100000 reports/report-trivy/trivy-report.txt
-              echo
-              echo '```'
-            else
-              echo "No Trivy report was produced."
-            fi
-
-            echo
-            echo "## Checkov results"
-            echo
-            if [ -s reports/report-checkov/checkov-report.json ]; then
-              failed=$(jq '.results.failed_checks // [] | length' reports/report-checkov/checkov-report.json)
-              passed=$(jq '.summary.passed // 0' reports/report-checkov/checkov-report.json)
-              skipped=$(jq '.summary.skipped // 0' reports/report-checkov/checkov-report.json)
-              echo "| Metric | Count |"
-              echo "|---|---:|"
-              echo "| Failed | $failed |"
-              echo "| Passed | $passed |"
-              echo "| Skipped | $skipped |"
-            else
-              echo "No Checkov report was produced."
-            fi
-
-            echo
-            echo "## Code quality results"
-            echo
-            echo "Prettier: $(icon "$R_QUALITY")"
-            if [ -s reports/report-lint/eslint-report.json ]; then
-              eslint_count=$(jq '[.[].messages[]] | length' reports/report-lint/eslint-report.json)
-              echo "ESLint findings: **$eslint_count**"
-            else
-              echo "ESLint report was not produced."
-            fi
-
-            echo
-            echo "Detailed machine-readable reports are available in the **security-report** artifact."
-          } | tee security-report.md >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload combined report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: security-report
-          path: |
-            security-report.md
-            reports/
-          if-no-files-found: error
-
-      - name: Configure AWS credentials for email
-        if: always() && env.AWS_SNS_TOPIC_ARN != '' && env.AWS_REPORT_ROLE_ARN != ''
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ env.AWS_REPORT_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REPORT_REGION }}
-
-      - name: Verify AWS CLI
-        if: always() && env.AWS_SNS_TOPIC_ARN != '' && env.AWS_REPORT_ROLE_ARN != ''
-        run: aws sts get-caller-identity
-
-      - name: Email combined report through SNS
-        if: always() && env.AWS_SNS_TOPIC_ARN != '' && env.AWS_REPORT_ROLE_ARN != ''
-        run: |
-          aws sns publish \
-            --topic-arn "$AWS_SNS_TOPIC_ARN" \
-            --subject "Security report: $GITHUB_REPOSITORY @ ${GITHUB_SHA::7}" \
-            --message file://security-report.md
+        run: npm run lint
