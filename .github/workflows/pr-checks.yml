@@ -36,13 +36,49 @@ jobs:
         run: |
           gitleaks detect --config .gitleaks.toml --verbose --report-format json --report-path gitleaks-report.json
 
-      - name: Upload Gitleaks Report Artifact
-        if: always()  # <--- Ensures artifact uploads even when leaks fail the build!
-        uses: actions/upload-artifact@v4
+      - name: Format Gitleaks Report as Markdown
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        id: format-comment
         with:
-          name: gitleaks-report
-          path: gitleaks-report.json
-          retention-days: 14
+          script: |
+            const fs = require('fs');
+            const reportPath = 'gitleaks-report.json';
+
+            if (!fs.existsSync(reportPath)) {
+              core.setOutput('comment', '### 🛡️ Secret Scan Results\n\nNo report file generated.');
+              return;
+            }
+
+            const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+
+            if (!report || report.length === 0) {
+              core.setOutput('comment', '### 🛡️ Secret Scan Results\n\n✅ **No secrets or credentials detected!** Your code is clean.');
+              return;
+            }
+
+            let markdown = `### 🚨 Secret Scan Results: ${report.length} Leak(s) Detected\n\n`;
+            markdown += '| Rule ID | File | Line | Secret Match |\n';
+            markdown += '| :--- | :--- | :--- | :--- |\n';
+
+            report.forEach(leak => {
+              const rule = leak.RuleID || 'Unknown Rule';
+              const file = leak.File || 'N/A';
+              const line = leak.StartLine || 'N/A';
+              const secret = leak.Secret ? `\`${leak.Secret.substring(0, 8)}...\`` : '`******`';
+              markdown += `| **${rule}** | \`${file}\` | \`${line}\` | ${secret} |\n`;
+            });
+
+            markdown += '\n> **Action Required:** Remove or revoke the leaked credential(s) before merging.';
+            core.setOutput('comment', markdown);
+
+      # 2. Post or update the comment on the Pull Request
+      - name: Post PR Comment
+        if: github.event_name == 'pull_request'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body: ${{ steps.format-comment.outputs.comment }}
 
   # codeql-analysis:
   #   name: CodeQL Analysis (${{ matrix.language }})
