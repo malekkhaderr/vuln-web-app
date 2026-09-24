@@ -335,12 +335,15 @@ jobs:
 
     steps:
       - name: Download all reports
+        if: always()
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           pattern: '*'
           path: reports
 
       - name: Build report
+        if: always()
         env:
           R_SECRETS: ${{ needs.secret-scan.result }}
           R_CODEQL: ${{ needs.codeql-analysis.result }}
@@ -445,6 +448,7 @@ jobs:
           } | tee security-report.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload combined report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: security-report
@@ -453,11 +457,12 @@ jobs:
             reports/
 
       - name: Post combined report to pull request
-        if: github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@v2
+        if: ${{ always() && github.event_name == 'pull_request' }}
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: security-report
           path: security-report.md
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Configure AWS credentials for email
         if: env.AWS_SNS_TOPIC_ARN != '' && env.AWS_REPORT_ROLE_ARN != ''
