@@ -73,14 +73,14 @@ jobs:
         uses: github/codeql-action/analyze@v4
         with:
           category: '/language:${{ matrix.language }}'
-          output: '../codeql-results-${{ matrix.language }}.sarif'
+          output: 'codeql-results-${{ matrix.language }}.sarif'
 
       - name: Save CodeQL SARIF for PR comment
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: codeql-sarif-${{ matrix.language }}
-          path: '../codeql-results-${{ matrix.language }}.sarif'
+          path: 'codeql-results-${{ matrix.language }}.sarif'
 
   dependency-scan:
     name: Dependency Scan (Trivy)
@@ -161,7 +161,7 @@ jobs:
         uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
-          sarif_file: checkov-results.sarif/results_sarif.sarif
+          sarif_file: checkov-results.sarif
           category: checkov
 
       - name: Save Checkov SARIF for PR comment
@@ -169,7 +169,7 @@ jobs:
         if: always()
         with:
           name: checkov-sarif
-          path: checkov-results.sarif/results_sarif.sarif
+          path: checkov-results.sarif
 
   pr-summary-comment:
     name: Post Detailed PR Security Report
@@ -257,7 +257,7 @@ jobs:
             const codeqlJsFindings = parseSarif('sarifs/codeql-js/codeql-results-javascript-typescript.sarif', 'CodeQL');
             const codeqlActionsFindings = parseSarif('sarifs/codeql-actions/codeql-results-actions.sarif', 'CodeQL');
             const trivyFindings = parseSarif('sarifs/trivy/trivy-results.sarif', 'Trivy');
-            const checkovFindings = parseSarif('sarifs/checkov/results_sarif.sarif', 'Checkov');
+            const checkovFindings = parseSarif('sarifs/checkov/checkov-results.sarif', 'Checkov');
 
             const allFindings = [
               ...gitleaksFindings,
