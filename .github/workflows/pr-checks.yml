@@ -98,7 +98,6 @@ jobs:
           name: gitleaks-report
           path: .
         continue-on-error: true
-
       - name: Format Combined Report as Markdown
         uses: actions/github-script@v7
         id: format-comment
@@ -127,34 +126,30 @@ jobs:
                   markdown += `✅ **No leaked secrets or credentials detected.**\n`;
                 }
               } catch (err) {
-                markdown += `⚠️ Failed to parse Gitleaks JSON report.\n`;
+                markdown += `⚠️ Failed to parse Gitleaks report.\n`;
               }
             } else {
-              markdown += `⚠️ Gitleaks report file not found.\n`;
+              markdown += `⚠️ Gitleaks report not found.\n`;
             }
 
             markdown += `\n---\n\n`;
 
-            // 2. Process CodeQL Result
+            // 2. Evaluate CodeQL Matrix Result Correctly
             markdown += `### 🔍 CodeQL Static Analysis (SAST)\n`;
-            const codeqlResult = "${{ needs.codeql-analysis.result }}";
 
-            if (codeqlResult === "success") {
-              markdown += `✅ **CodeQL Analysis Passed!** No security vulnerabilities detected.\n`;
-            } else if (codeqlResult === "failure") {
-              markdown += `🚨 **CodeQL Analysis Failed!** New vulnerabilities detected in code. Check line annotations under **Files Changed** or the repository **Security** tab.\n`;
+            // Evaluates the overall needs result string directly
+            const codeqlOutcome = `${process.env.CODEQL_RESULT}`;
+
+            if (codeqlOutcome === 'success') {
+              markdown += `✅ **CodeQL Analysis Passed!** No security vulnerabilities detected in PR diff.\n`;
             } else {
-              markdown += `⚠️ CodeQL scan completed with status: **${codeqlResult}**\n`;
+              markdown += `🚨 **CodeQL Analysis Failed!** Security vulnerabilities were detected in this PR (e.g., Critical/High alerts). Check the **Checks** tab or **Files Changed** annotations for line-by-line details.\n`;
             }
 
             markdown += `\n> *Report generated automatically by GitHub Actions.*`;
             core.setOutput('comment', markdown);
-
-      - name: Post PR Comment
-        uses: peter-evans/create-or-update-comment@v4
-        with:
-          issue-number: ${{ github.event.pull_request.number }}
-          body: ${{ steps.format-comment.outputs.comment }}
+        env:
+          CODEQL_RESULT: ${{ needs.codeql-analysis.result }}
   # dependency-scan:
   #   name: Dependency Scan (Trivy)
   #   runs-on: ubuntu-latest
