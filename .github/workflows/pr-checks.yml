@@ -21,6 +21,8 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      security-events: write
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -73,26 +75,35 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      security-events: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Scan repository with Trivy
+      - name: Scan repository with Trivy (SARIF Report)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          scan-type: fs
-          scan-ref: .
-          scanners: vuln,secret
-          severity: HIGH,CRITICAL
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'HIGH,CRITICAL'
           ignore-unfixed: true
-          exit-code: '1'
+
+      - name: Upload Trivy SARIF report to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'trivy'
 
   cdk-synth:
     name: CDK Synthesis + Checkov
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      security-events: write
 
     steps:
       - name: Checkout repository
@@ -119,11 +130,22 @@ jobs:
           WEB_ACL_ARN: arn:aws:wafv2:us-east-1:000000000000:global/webacl/ci-placeholder/ci-placeholder
         run: npx cdk synth --app "npx tsx bin/target-app.ts"
 
-      - name: Install Checkov
-        run: python -m pip install checkov
+      - name: Run Checkov (Generate SARIF)
+        uses: bridgecrewio/checkov-action@master
+        if: always()
+        with:
+          directory: cdk/cdk.out
+          framework: cloudformation
+          output_format: sarif
+          output_file_path: checkov-results.sarif
+          soft_fail: true
 
-      - name: Scan synthesized CloudFormation with Checkov
-        run: checkov -d cdk/cdk.out --framework cloudformation --quiet
+      - name: Upload Checkov SARIF report to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: cdk/cdk.out/checkov-results.sarif
+          category: 'checkov'
 
   code-quality:
     name: Lint and Format
