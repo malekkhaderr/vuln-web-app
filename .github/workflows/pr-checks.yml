@@ -1,19 +1,17 @@
 name: Security Checks
-
-on:
-  push:
-  pull_request:
+'on':
+  push: null
+  pull_request: null
   schedule:
-    - cron: '30 1 * * 0'
-  workflow_dispatch:
-
+    - cron: 30 1 * * 0
+  workflow_dispatch: null
 permissions:
   contents: read
-
 concurrency:
-  group: security-checks-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: >-
+    security-checks-${{ github.workflow }}-${{ github.event.pull_request.number
+    || github.ref }}
   cancel-in-progress: true
-
 jobs:
   secret-scan:
     name: Secret Scan (Gitleaks)
@@ -22,114 +20,97 @@ jobs:
       contents: read
       pull-requests: write
       security-events: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Scan for secrets
         uses: gitleaks/gitleaks-action@v2
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+          GITLEAKS_LICENSE: '${{ secrets.GITLEAKS_LICENSE }}'
           GITLEAKS_ENABLE_SUMMARY: 'true'
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'true'
-          GITLEAKS_ENABLE_COMMENTS: ${{ github.event_name == 'pull_request' }}
-
+          GITLEAKS_ENABLE_COMMENTS: '${{ github.event_name == ''pull_request'' }}'
   codeql-analysis:
-    name: CodeQL Analysis (${{ matrix.language }})
+    name: 'CodeQL Analysis (${{ matrix.language }})'
     runs-on: ubuntu-latest
     permissions:
       actions: read
       contents: read
       security-events: write
-
     strategy:
       fail-fast: false
       matrix:
         language:
           - javascript-typescript
           - actions
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
-          languages: ${{ matrix.language }}
+          languages: '${{ matrix.language }}'
           queries: security-extended
-
       - name: Analyze with CodeQL
         uses: github/codeql-action/analyze@v4
         with:
           category: '/language:${{ matrix.language }}'
-
   dependency-scan:
     name: Dependency Scan (Trivy)
     runs-on: ubuntu-latest
     permissions:
       contents: read
       security-events: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Scan repository with Trivy (SARIF Report)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
           severity: 'HIGH,CRITICAL'
           ignore-unfixed: true
-
       - name: Upload Trivy SARIF report to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
-          sarif_file: 'trivy-results.sarif'
-          category: 'trivy'
-
+          sarif_file: trivy-results.sarif
+          category: trivy
   cdk-synth:
     name: CDK Synthesis + Checkov
     runs-on: ubuntu-latest
     permissions:
       contents: read
       security-events: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-
       - name: Install application dependencies
         run: npm ci
-
       - name: Install CDK dependencies
         working-directory: cdk
         run: npm ci
-
       - name: Synthesize CDK
         working-directory: cdk
         env:
           CDK_DEFAULT_ACCOUNT: '000000000000'
           CDK_DEFAULT_REGION: eu-west-1
-          WEB_ACL_ARN: arn:aws:wafv2:us-east-1:000000000000:global/webacl/ci-placeholder/ci-placeholder
+          WEB_ACL_ARN: >-
+            arn:aws:wafv2:us-east-1:000000000000:global/webacl/ci-placeholder/ci-placeholder
         run: npx cdk synth --app "npx tsx bin/target-app.ts"
-
       - name: Run Checkov (Generate SARIF)
         uses: bridgecrewio/checkov-action@master
         if: always()
@@ -139,10 +120,27 @@ jobs:
           output_format: sarif
           output_file_path: checkov-results.sarif
           soft_fail: true
-
       - name: Upload Checkov SARIF report to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: checkov-results.sarif
-          category: 'checkov'
+          category: checkov
+  pr-summary-comment:
+    name: Post PR Security Summary
+    runs-on: ubuntu-latest
+    if: always() && github.event_name == 'pull_request'
+    needs:
+      - secret-scan
+      - codeql-analysis
+      - dependency-scan
+      - cdk-synth
+      - code-quality
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Post or update PR comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: security-suite-report
+          message: "### \U0001F6E1️ Combined Security & Code Quality Report\n**Commit:** `${{ github.sha }}`\n\n| Check | Tool | Status |\n| :--- | :--- | :--- |\n| **Secret Scan** | Gitleaks | ${{ needs.secret-scan.result == 'success' && '✅ Passed' || '❌ Failed' }} |\n| **SAST Analysis** | CodeQL | ${{ needs.codeql-analysis.result == 'success' && '✅ Passed' || '❌ Failed' }} |\n| **Dependencies** | Trivy | ${{ needs.dependency-scan.result == 'success' && '✅ Passed' || '❌ Failed' }} |\n| **IaC Scan** | Checkov | ${{ needs.cdk-synth.result == 'success' && '✅ Passed' || '❌ Failed' }} |\n| **Code Quality** | ESLint / Prettier | ${{ needs.code-quality.result == 'success' && '✅ Passed' || '❌ Failed' }} |\n\n*Detailed vulnerability alerts can be inspected directly in the [Security tab](https://github.com/${{ github.repository }}/security/code-scanning).*\n"
