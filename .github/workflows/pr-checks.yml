@@ -318,6 +318,14 @@ jobs:
     name: Security Report
     runs-on: ubuntu-latest
     if: always()
+    env:
+      AWS_SNS_TOPIC_ARN: ${{ secrets.AWS_SNS_TOPIC_ARN }}
+      AWS_REPORT_ROLE_ARN: ${{ secrets.AWS_REPORT_ROLE_ARN }}
+      AWS_REPORT_REGION: ${{ vars.AWS_REPORT_REGION || 'eu-west-1' }}
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
     needs:
       - secret-scan
       - codeql-analysis
@@ -368,20 +376,65 @@ jobs:
 
             shopt -s nullglob
             sarifs=(reports/report-codeql-*/*.sarif)
+            echo
+            echo "## Gitleaks results"
+            echo
+            echo "Result: $(icon \"$R_SECRETS\")"
+            echo
+            echo "Gitleaks details are available in the Gitleaks job output and artifact."
+
+            echo
+            echo "## CodeQL results"
+            echo
             if [ ${#sarifs[@]} -gt 0 ]; then
-              echo
-              echo "## CodeQL findings"
-              echo
               echo "| Language | Findings |"
-              echo "|---|---|"
+              echo "|---|---:|"
               for f in "${sarifs[@]}"; do
                 lang=$(basename "$(dirname "$f")" | sed 's/^report-codeql-//')
                 echo "| $lang | $(jq '[.runs[].results[]?] | length' "$f") |"
               done
+            else
+              echo "No CodeQL SARIF report was produced."
             fi
 
             echo
-            echo "Detailed per-tool output is in each job's summary and in the run's **Artifacts** section."
+            echo "## Trivy results"
+            echo
+            trivy=(reports/report-trivy/*)
+            if [ ${#trivy[@]} -gt 0 ] && [ -s "${trivy[0]}" ]; then
+              echo '```text'
+              head -c 100000 "${trivy[0]}"
+              echo
+              echo '```'
+            else
+              echo "No Trivy report was produced."
+            fi
+
+            echo
+            echo "## Checkov results"
+            echo
+            checkov=(reports/report-checkov/*)
+            if [ ${#checkov[@]} -gt 0 ]; then
+              for f in "${checkov[@]}"; do
+                if [ -s "$f" ]; then
+                  echo '```text'
+                  head -c 100000 "$f"
+                  echo
+                  echo '```'
+                fi
+              done
+            else
+              echo "No Checkov report was produced."
+            fi
+
+            echo
+            echo "## Code quality results"
+            echo
+            echo "Prettier: $(icon \"$R_QUALITY\")"
+            echo "ESLint details are included in the lint artifact when findings exist."
+
+            echo
+            echo "Detailed machine-readable reports are available in the **security-report** artifact."
           } | tee security-report.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload combined report
@@ -391,3 +444,25 @@ jobs:
           path: |
             security-report.md
             reports/
+
+      - name: Post combined report to pull request
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: security-report
+          path: security-report.md
+
+      - name: Configure AWS credentials for email
+        if: env.AWS_SNS_TOPIC_ARN != '' && env.AWS_REPORT_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_REPORT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REPORT_REGION }}
+
+      - name: Email combined report through SNS
+        if: env.AWS_SNS_TOPIC_ARN != '' && env.AWS_REPORT_ROLE_ARN != ''
+        run: |
+          aws sns publish \
+            --topic-arn "$AWS_SNS_TOPIC_ARN" \
+            --subject "Security report: $GITHUB_REPOSITORY @ ${GITHUB_SHA::7}" \
+            --message file://security-report.md
