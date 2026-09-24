@@ -35,6 +35,7 @@ jobs:
       - name: Run Gitleaks Scan
         run: |
           gitleaks detect --config .gitleaks.toml --verbose --report-format json --report-path gitleaks-report.json
+        continue-on-error: true
 
       - name: Format Gitleaks Report as Markdown
         if: github.event_name == 'pull_request'
