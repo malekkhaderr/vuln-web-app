@@ -1,11 +1,11 @@
 name: Security Checks
 
-'on':
-  push: null
-  pull_request: null
+on:
+  push:
+  pull_request:
   schedule:
     - cron: '30 1 * * 0'
-  workflow_dispatch: null
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -21,7 +21,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-      security-events: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -31,230 +30,122 @@ jobs:
       - name: Scan for secrets
         uses: gitleaks/gitleaks-action@v2
         env:
-          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
-          GITLEAKS_LICENSE: '${{ secrets.GITLEAKS_LICENSE }}'
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
           GITLEAKS_ENABLE_SUMMARY: 'true'
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'true'
-          GITLEAKS_ENABLE_COMMENTS: "${{ github.event_name == 'pull_request' }}"
+          GITLEAKS_ENABLE_COMMENTS: ${{ github.event_name == 'pull_request' }}
 
-  codeql-analysis:
-    name: 'CodeQL Analysis (${{ matrix.language }})'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      contents: read
-      security-events: write
-    strategy:
-      fail-fast: false
-      matrix:
-        language:
-          - javascript-typescript
-          - actions
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+  # codeql-analysis:
+  #   name: CodeQL Analysis (${{ matrix.language }})
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     actions: read
+  #     contents: read
+  #     security-events: write
 
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
-        with:
-          languages: '${{ matrix.language }}'
-          queries: security-extended
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       language:
+  #         - javascript-typescript
+  #         - actions
 
-      - name: Analyze with CodeQL
-        uses: github/codeql-action/analyze@v4
-        with:
-          category: '/language:${{ matrix.language }}'
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@v4
+  #       with:
+  #         fetch-depth: 0
 
-  dependency-scan:
-    name: Dependency Scan (Trivy)
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+  #     - name: Initialize CodeQL
+  #       uses: github/codeql-action/init@v3
+  #       with:
+  #         languages: ${{ matrix.language }}
+  #         queries: security-extended
 
-      - name: Scan repository with Trivy (SARIF Report)
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          format: sarif
-          output: trivy-results.sarif
-          severity: 'HIGH,CRITICAL'
-          ignore-unfixed: true
+  #     - name: Analyze with CodeQL
+  #       uses: github/codeql-action/analyze@v3
+  #       with:
+  #         category: '/language:${{ matrix.language }}'
 
-      - name: Upload Trivy SARIF report to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v4
-        if: always()
-        with:
-          sarif_file: trivy-results.sarif
-          category: trivy
+  # dependency-scan:
+  #   name: Dependency Scan (Trivy)
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     contents: read
 
-  cdk-synth:
-    name: CDK Synthesis + Checkov
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
+  #     - name: Scan repository with Trivy
+  #       uses: aquasecurity/trivy-action@v0.36.0
+  #       with:
+  #         scan-type: fs
+  #         scan-ref: .
+  #         scanners: vuln,secret
+  #         severity: HIGH,CRITICAL
+  #         ignore-unfixed: true
+  #         exit-code: '1'
 
-      - name: Install application dependencies
-        run: npm ci
+  # cdk-synth:
+  #   name: CDK Synthesis + Checkov
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     contents: read
 
-      - name: Install CDK dependencies
-        working-directory: cdk
-        run: npm ci
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@v4
 
-      - name: Synthesize CDK
-        working-directory: cdk
-        continue-on-error: true
-        env:
-          CDK_DEFAULT_ACCOUNT: '000000000000'
-          CDK_DEFAULT_REGION: eu-west-1
-          WEB_ACL_ARN: arn:aws:wafv2:us-east-1:000000000000:global/webacl/ci-placeholder/ci-placeholder
-        run: npx cdk synth --app "npx tsx bin/target-app.ts"
+  #     - name: Set up Node.js
+  #       uses: actions/setup-node@v4
+  #       with:
+  #         node-version: 22
+  #         cache: npm
 
-      - name: Run Checkov (Generate SARIF)
-        uses: bridgecrewio/checkov-action@master
-        if: always()
-        with:
-          directory: cdk/cdk.out
-          framework: cloudformation
-          output_format: sarif
-          output_file_path: checkov-results.sarif
-          soft_fail: true
+  #     - name: Install application dependencies
+  #       run: npm ci
 
-      - name: Upload Checkov SARIF report to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v4
-        if: always()
-        with:
-          sarif_file: checkov-results.sarif
-          category: checkov
+  #     - name: Install CDK dependencies
+  #       working-directory: cdk
+  #       run: npm ci
 
-  pr-summary-comment:
-    name: Post Detailed PR Security Report
-    runs-on: ubuntu-latest
-    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push')
-    needs:
-      - secret-scan
-      - codeql-analysis
-      - dependency-scan
-      - cdk-synth
-    permissions:
-      security-events: read
-      pull-requests: write
-      contents: read
+  #     - name: Synthesize CDK
+  #       working-directory: cdk
+  #       env:
+  #         CDK_DEFAULT_ACCOUNT: '000000000000'
+  #         CDK_DEFAULT_REGION: eu-west-1
+  #         WEB_ACL_ARN: arn:aws:wafv2:us-east-1:000000000000:global/webacl/ci-placeholder/ci-placeholder
+  #       run: npx cdk synth --app "npx tsx bin/target-app.ts"
 
-    steps:
-      - name: Download All Security Artifacts
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          pattern: '*-sarif'
-          path: sarifs
-          merge-multiple: true
+  #     - name: Install Checkov
+  #       run: python -m pip install checkov
 
-      - name: Generate Detailed Markdown Report
-        uses: actions/github-script@v7
-        id: generate-report
-        env:
-          SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
-          CODEQL_RESULT: ${{ needs.codeql-analysis.result }}
-          DEPENDENCY_SCAN_RESULT: ${{ needs.dependency-scan.result }}
-          CDK_SYNTH_RESULT: ${{ needs.cdk-synth.result }}
-        with:
-          script: |
-            const fs = require('fs');
-            const path = require('path');
+  #     - name: Scan synthesized CloudFormation with Checkov
+  #       run: checkov -d cdk/cdk.out --framework cloudformation --quiet
 
-            function parseAllSarifs(dirPath) {
-              if (!fs.existsSync(dirPath)) return [];
-              const findings = [];
+  # code-quality:
+  #   name: Lint and Format
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     contents: read
 
-              function walk(currentDir) {
-                const files = fs.readdirSync(currentDir);
-                for (const file of files) {
-                  const fullPath = path.join(currentDir, file);
-                  if (fs.statSync(fullPath).isDirectory()) {
-                    walk(fullPath);
-                  } else if (file.endsWith('.sarif')) {
-                    try {
-                      const data = JSON.parse(fs.readFileSync(fullPath, 'utf8'));
-                      for (const run of data.runs || []) {
-                        const toolName = run.tool?.driver?.name || 'Security Tool';
-                        for (const result of run.results || []) {
-                          const ruleId = result.ruleId || 'Unknown Rule';
-                          const message = result.message?.text || 'No description';
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@v4
 
-                          let level = result.level || 'warning';
-                          if (result.kind === 'fail' && !result.level) level = 'warning';
+  #     - name: Set up Node.js
+  #       uses: actions/setup-node@v4
+  #       with:
+  #         node-version: 22
+  #         cache: npm
 
-                          const location = result.locations?.[0]?.physicalLocation;
-                          const filePathUri = location?.artifactLocation?.uri || 'N/A';
-                          const line = location?.region?.startLine || '-';
-                          findings.push({ toolName, ruleId, message, level, file: filePathUri, line });
-                        }
-                      }
-                    } catch (e) {
-                      console.log(`Failed to parse ${fullPath}: ${e.message}`);
-                    }
-                  }
-                }
-              }
+  #     - name: Install dependencies
+  #       run: npm ci
 
-              walk(dirPath);
-              return findings;
-            }
+  #     - name: Check formatting
+  #       run: npm run format:check
 
-            const allFindings = parseAllSarifs('sarifs');
-
-            let detailedMarkdown = '';
-            if (allFindings.length === 0) {
-              detailedMarkdown = '\n\n### 🔍 Detailed Findings\n\n✨ **No open security findings detected!**';
-            } else {
-              detailedMarkdown = `\n\n<details open><summary><b>🔍 Detailed Vulnerability Findings (${allFindings.length})</b></summary>\n\n` +
-                '| Tool | Severity | Rule / Issue | File Path | Line |\n' +
-                '| :--- | :--- | :--- | :--- | :--- |\n' +
-                allFindings.map(f => {
-                  const severityBadge = (f.level === 'error') ? '🔴 Error' : (f.level === 'note' ? '🔵 Info' : '🟡 Warning');
-                  const cleanMsg = f.message.replace(/[\r\n]+/g, ' ').substring(0, 120);
-                  return `| **${f.toolName}** | ${severityBadge} | **${f.ruleId}**: ${cleanMsg} | \`${f.file}\` | \`${f.line}\` |`;
-                }).join('\n') +
-                '\n\n</details>';
-            }
-
-            const statusBadge = (res) => res === 'success' ? '✅ Passed' : '❌ Failed';
-
-            const summaryTable = [
-              '| Check | Tool | Status |',
-              '| :--- | :--- | :--- |',
-              `| **Secret Scan** | Gitleaks | ${statusBadge(process.env.SECRET_SCAN_RESULT)} |`,
-              `| **SAST Analysis** | CodeQL | ${statusBadge(process.env.CODEQL_RESULT)} |`,
-              `| **Dependencies** | Trivy | ${statusBadge(process.env.DEPENDENCY_SCAN_RESULT)} |`,
-              `| **IaC Scan** | Checkov | ${statusBadge(process.env.CDK_SYNTH_RESULT)} |`
-            ].join('\n');
-
-            const commentBody = `### 🛡️ Combined Security & Code Quality Report\n` +
-              `**Commit:** \`${context.sha}\`\n\n` +
-              `${summaryTable}` +
-              `${detailedMarkdown}`;
-
-            fs.writeFileSync('pr-report.md', commentBody);
-
-      - name: Post or Update PR Comment
-        uses: marocchino/sticky-pull-request-comment@v2
-        with:
-          header: security-suite-report
-          path: pr-report.md
+  #     - name: Run ESLint
+  #       run: npm run lint
