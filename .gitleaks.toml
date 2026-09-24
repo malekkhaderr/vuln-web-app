@@ -6,13 +6,9 @@ description = "Intentional decoys and scanner configuration"
 paths = [
   '''^\.gitleaks\.toml$''',
   '''^\.pre-commit-config\.yaml$''',
-  '''^secret-scanning-fixture/decoys\.txt$''',
   '''^node_modules/''',
   '''^cdk/node_modules/''',
-  '''^\.env$''',
-  '''^\.env\..*$''',
-  '''^\.env\.example$''',
-  '''^,env\.example$''',
+  # Note: Removed .env and decoys.txt from path allowlist so test files in these paths are actually scanned!
 ]
 
 regexes = [
@@ -22,26 +18,37 @@ regexes = [
   '''-----BEGIN PRIVATE KEY-----[\s\S]*?DECOY_KEY'''
 ]
 
+# 1. Matches AWS Access Key IDs (e.g., AKIA7EXAMPLE9FIXTURE2)
 [[rules]]
 id = "aws-access-key-id"
 description = "Detected AWS Access Key ID"
-regex = '''(?i)(?:aws_access_key_id|aws_key|aws_secret)\s*[:=]\s*["']?(AKIA[0-9A-Z]{16})["']?'''
-keywords = ["akia"]
+regex = '''(?i)(?:aws_access_key_id|aws_key|aws_access_key)\s*[:=]\s*["']?(AKIA[0-9A-Z]{16})["']?'''
+keywords = ["akia", "aws_access_key_id"]
 
+# 2. Matches AWS Secret Access Keys (including non-standard strings like not-a-real-secret-fixture-value-2026)
+[[rules]]
+id = "aws-secret-access-key"
+description = "Detected AWS Secret Access Key"
+regex = '''(?i)(?:aws_secret_access_key|aws_secret_key|aws_secret)\s*[:=]\s*["']?([a-zA-Z0-9/+=_-]{20,})["']?'''
+keywords = ["aws_secret_access_key", "aws_secret_key"]
+
+# 3. Matches Database Connection Strings (handles special characters like '!' in passwords and unseparated text)
+[[rules]]
+id = "database-url"
+description = "Detected database connection string with credentials"
+regex = '''(?i)(?:postgres|postgresql|mysql|mongodb)://[a-zA-Z0-9_-]+:[^\s"']+@[a-zA-Z0-9.-]+:[0-9]+/[a-zA-Z0-9_-]+'''
+keywords = ["postgres://", "postgresql://", "mysql://", "mongodb://"]
+
+# 4. Matches Custom API Tokens (e.g., "api_token": "svc_live_...")
+[[rules]]
+id = "api-token"
+description = "Detected API or bearer token"
+regex = '''(?i)(?:api[_-]?(?:key|token)|auth[_-]?token|bearer)\s*["']?\s*[:=]\s*["']?([a-zA-Z0-9_-]{32,})["']?'''
+keywords = ["api_key", "api-token", "api_token", "auth_token", "bearer", "svc_live_"]
+
+# 5. Matches Unencrypted Private Keys
 [[rules]]
 id = "private-key"
 description = "Detected unencrypted private key"
 regex = '''-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----'''
 keywords = ["private key", "-----begin"]
-
-[[rules]]
-id = "database-url"
-description = "Detected database connection string with credentials"
-regex = '''(?i)(?:postgres|postgresql|mysql|mongodb)://[a-zA-Z0-9_]+:[^@\s"']+@[a-zA-Z0-9.-]+:[0-9]+/[a-zA-Z0-9_]+'''
-keywords = ["postgres://", "postgresql://", "mysql://", "mongodb://"]
-
-[[rules]]
-id = "api-token"
-description = "Detected API or bearer token"
-regex = '''(?i)(?:api[_-]?(?:key|token)|auth[_-]?token|bearer)\s*["']?\s*[:=]\s*["']?([a-zA-Z0-9_-]{32,})["']?'''
-keywords = ["api_key", "api-token", "api_token", "auth_token", "bearer"]
