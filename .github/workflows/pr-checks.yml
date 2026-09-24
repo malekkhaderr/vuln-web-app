@@ -80,7 +80,7 @@ jobs:
             if [ -z "$f" ]; then
               echo "No SARIF file was produced."
             else
-              total=$(jq '[.runs[].results[]?] | length' "$f")
+              total=$(jq '[.runs[].results[]?] \vert{} length' "$f")
               echo "Findings: **$total**"
               if [ "$total" -gt 0 ]; then
                 echo
@@ -117,7 +117,7 @@ jobs:
       - name: Scan repository with Trivy
         id: trivy
         continue-on-error: true
-        uses: aquasecurity/trivy-action@master # pinned; avoid @master in a security workflow
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: fs
           scan-ref: .
@@ -281,7 +281,7 @@ jobs:
                 echo "|---|---|---|---|"
                 jq -r --arg ws "$GITHUB_WORKSPACE/" '
                   [.[] | select(.messages | length > 0) | .filePath as $f | .messages[]
-                    | "| \($f | sub($ws; "")) | \(.line // "-") | \(.ruleId // "-") | \(.message | gsub("[|\n]"; " ")) |"][:100][]
+                    | "| \($f \vert{} sub($ws; "")) | \(.line // "-") | \(.ruleId // "-") | \(.message | gsub("[|\n]"; " ")) |"][:100][]
                 ' eslint-report.json
                 if [ "$count" -gt 100 ]; then
                   echo
@@ -324,7 +324,7 @@ jobs:
       AWS_REPORT_REGION: ${{ vars.AWS_REPORT_REGION || 'eu-west-1' }}
     permissions:
       contents: read
-      pull-requests: write
+      pull-requests: write # Ensures permission to comment on PRs
       id-token: write
     needs:
       - secret-scan
@@ -381,12 +381,12 @@ jobs:
             echo
             echo "## Gitleaks results"
             echo
-            echo "Result: $(icon \"$R_SECRETS\")"
+            echo "Result: $(icon "$R_SECRETS")"
             echo
-            mapfile -t gitleaks_sarifs < <(find reports -type f \( -iname '*gitleaks*.sarif' -o -iname '*secret*.sarif' \) -print)
+            mapfile -t gitleaks_sarifs < <(find reports -type f \(-iname '*gitleaks*.sarif' -o -iname '*secret*.sarif'\) -print)
             if [ ${#gitleaks_sarifs[@]} -gt 0 ]; then
               for f in "${gitleaks_sarifs[@]}"; do
-                echo "Findings: **$(jq '[.runs[].results[]?] | length' \"$f\")**"
+                echo "Findings: **$(jq '[.runs[].results[]?] \vert{} length' "$f")**"
               done
             else
               echo "Gitleaks details are available in the Gitleaks job output and artifact."
@@ -401,7 +401,7 @@ jobs:
               echo "|---|---:|"
               for f in "${sarifs[@]}"; do
                 lang=$(basename "$f" .sarif)
-                echo "| $lang | $(jq '[.runs[].results[]?] | length' "$f") |"
+                echo "| $lang | $(jq '[.runs[].results[]?] \vert{} length' "$f") |"
               done
             else
               echo "No CodeQL SARIF report was produced."
@@ -440,7 +440,7 @@ jobs:
             echo
             echo "## Code quality results"
             echo
-            echo "Prettier: $(icon \"$R_QUALITY\")"
+            echo "Prettier: $(icon "$R_QUALITY")"
             echo "ESLint details are included in the lint artifact when findings exist."
 
             echo
@@ -458,11 +458,11 @@ jobs:
 
       - name: Post combined report to pull request
         if: ${{ always() && github.event_name == 'pull_request' }}
-        uses: marocchino/sticky-pull-request-comment@v3
+        uses: marocchino/sticky-pull-request-comment@v2
         with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           header: security-report
           path: security-report.md
-          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Configure AWS credentials for email
         if: env.AWS_SNS_TOPIC_ARN != '' && env.AWS_REPORT_ROLE_ARN != ''
