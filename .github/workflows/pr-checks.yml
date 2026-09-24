@@ -225,7 +225,7 @@ jobs:
                           const message = result.message?.text || 'No description';
 
                           let level = result.level || 'warning';
-                          if (result.kind === 'fail' && !result.level) level = 'error';
+                          if (result.kind === 'fail' && !result.level) level = 'warning';
 
                           const location = result.locations?.[0]?.physicalLocation;
                           const filePathUri = location?.artifactLocation?.uri || 'N/A';
@@ -263,16 +263,19 @@ jobs:
 
             const statusBadge = (res) => res === 'success' ? '✅ Passed' : '❌ Failed';
 
-            const commentBody = `### 🛡️ Combined Security & Code Quality Report
-            **Commit:** \`${context.sha}\`
+            const summaryTable = [
+              '| Check | Tool | Status |',
+              '| :--- | :--- | :--- |',
+              `| **Secret Scan** | Gitleaks | ${statusBadge(process.env.SECRET_SCAN_RESULT)} |`,
+              `| **SAST Analysis** | CodeQL | ${statusBadge(process.env.CODEQL_RESULT)} |`,
+              `| **Dependencies** | Trivy | ${statusBadge(process.env.DEPENDENCY_SCAN_RESULT)} |`,
+              `| **IaC Scan** | Checkov | ${statusBadge(process.env.CDK_SYNTH_RESULT)} |`
+            ].join('\n');
 
-            | Check | Tool | Status |
-            | :--- | :--- | :--- |
-            | **Secret Scan** | Gitleaks | ${statusBadge(process.env.SECRET_SCAN_RESULT)} |
-            | **SAST Analysis** | CodeQL | ${statusBadge(process.env.CODEQL_RESULT)} |
-            | **Dependencies** | Trivy | ${statusBadge(process.env.DEPENDENCY_SCAN_RESULT)} |
-            | **IaC Scan** | Checkov | ${statusBadge(process.env.CDK_SYNTH_RESULT)} |
-            ${detailedMarkdown}`;
+            const commentBody = `### 🛡️ Combined Security & Code Quality Report\n` +
+              `**Commit:** \`${context.sha}\`\n\n` +
+              `${summaryTable}` +
+              `${detailedMarkdown}`;
 
             fs.writeFileSync('pr-report.md', commentBody);
 
