@@ -163,7 +163,7 @@ jobs:
   pr-summary-comment:
     name: Post Detailed PR Security Report
     runs-on: ubuntu-latest
-    if: always() && github.event_name == 'pull_request'
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push')
     needs:
       - secret-scan
       - codeql-analysis
