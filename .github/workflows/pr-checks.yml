@@ -337,7 +337,7 @@ jobs:
       - name: Download all reports
         uses: actions/download-artifact@v4
         with:
-          pattern: report-*
+          pattern: '*'
           path: reports
 
       - name: Build report
@@ -374,23 +374,30 @@ jobs:
             echo "| CDK synth + Checkov | $(icon "$R_CDK") |"
             echo "| Lint and format | $(icon "$R_QUALITY") |"
 
-            shopt -s nullglob
-            sarifs=(reports/report-codeql-*/*.sarif)
+            mapfile -t sarifs < <(find reports -type f -name '*.sarif' -print)
             echo
             echo "## Gitleaks results"
             echo
             echo "Result: $(icon \"$R_SECRETS\")"
             echo
-            echo "Gitleaks details are available in the Gitleaks job output and artifact."
+            mapfile -t gitleaks_sarifs < <(find reports -type f \( -iname '*gitleaks*.sarif' -o -iname '*secret*.sarif' \) -print)
+            if [ ${#gitleaks_sarifs[@]} -gt 0 ]; then
+              for f in "${gitleaks_sarifs[@]}"; do
+                echo "Findings: **$(jq '[.runs[].results[]?] | length' \"$f\")**"
+              done
+            else
+              echo "Gitleaks details are available in the Gitleaks job output and artifact."
+            fi
 
             echo
             echo "## CodeQL results"
             echo
+            mapfile -t sarifs < <(find reports -path '*report-codeql-*' -type f -name '*.sarif' -print)
             if [ ${#sarifs[@]} -gt 0 ]; then
               echo "| Language | Findings |"
               echo "|---|---:|"
               for f in "${sarifs[@]}"; do
-                lang=$(basename "$(dirname "$f")" | sed 's/^report-codeql-//')
+                lang=$(basename "$f" .sarif)
                 echo "| $lang | $(jq '[.runs[].results[]?] | length' "$f") |"
               done
             else
