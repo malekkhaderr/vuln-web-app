@@ -146,7 +146,7 @@ jobs:
   pr-summary-comment:
     name: Post Detailed PR Security Report
     runs-on: ubuntu-latest
-    if:  always() && (github.event_name == 'pull_request' || github.event_name == 'push')
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push')
     needs:
       - secret-scan
       - codeql-analysis
@@ -161,13 +161,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Generate Security Report Comment
+      - name: Generate Detailed Security Report
         uses: advanced-security/security-report-action@main
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Upload PDF Report as Artifact
+          # Enables line-by-line itemized findings in the output
+          include-code-scanning: true
+          include-dependabot: true
+          include-secret-scanning: true
+
+      - name: Upload Detailed PDF & HTML Artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: security-summary-report
-          path: summary.pdf
+          name: security-detailed-report
+          path: |
+            summary.pdf
+            summary.html
+
+      - name: Post Detailed Markdown Table to PR
+        uses: marocchino/sticky-pull-request-comment@v2
+        if: always()
+        with:
+          header: security-suite-report
+          path: summary.md
