@@ -36,6 +36,14 @@ jobs:
         run: |
           gitleaks detect --config .gitleaks.toml --verbose --report-format json --report-path local-gitleaks-report.json
 
+      - name: Upload Gitleaks Report Artifact
+        if: always()  # <--- Ensures artifact uploads even when leaks fail the build!
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-report
+          path: gitleaks-report.json
+          retention-days: 14
+
   # codeql-analysis:
   #   name: CodeQL Analysis (${{ matrix.language }})
   #   runs-on: ubuntu-latest
