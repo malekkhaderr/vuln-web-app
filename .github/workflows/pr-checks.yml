@@ -82,7 +82,7 @@ jobs:
       - name: Analyze with CodeQL
         uses: github/codeql-action/analyze@v3
         with:
-          category: '/language:${{ matrix.language }}'
+          category: '/language:${{ matrix.language }}-fresh-run'
   security-checks-summary:
     name: Post Combined Security PR Comment
     runs-on: ubuntu-latest
