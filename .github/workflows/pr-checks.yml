@@ -82,7 +82,16 @@ jobs:
       - name: Analyze with CodeQL
         uses: github/codeql-action/analyze@v3
         with:
-          category: '/language:${{ matrix.language }}-v2'
+          category: '/language:${{ matrix.language }}'
+          output: '${{ github.workspace }}/results'
+
+      - name: Upload CodeQL SARIF Artifact
+        uses: actions/upload-artifact@v4
+        if: always() # Ensures artifact uploads even when CodeQL detects vulnerabilities
+        with:
+          name: codeql-results-${{ matrix.language }}
+          path: results/*.sarif
+
   security-checks-summary:
     name: Post Combined Security PR Comment
     runs-on: ubuntu-latest
@@ -100,16 +109,28 @@ jobs:
           path: .
         continue-on-error: true
 
+      # Downloads all codeql-results-* artifacts into a 'sarif-reports' directory
+      - name: Download CodeQL SARIF Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: codeql-results-*
+          path: sarif-reports
+          merge-multiple: true
+        continue-on-error: true
+
       - name: Format Combined Report as Markdown
         uses: actions/github-script@v7
         id: format-comment
         with:
           script: |
             const fs = require('fs');
+            const path = require('path');
 
             let markdown = `## 🛡️ Combined Security Scan Results\n\n`;
 
+            // ==========================================
             // 1. Process Gitleaks Report
+            // ==========================================
             markdown += `### 🔑 Secret Scanning (Gitleaks)\n`;
             if (fs.existsSync('gitleaks-report.json')) {
               try {
@@ -136,19 +157,104 @@ jobs:
 
             markdown += `\n---\n\n`;
 
-            // 2. Process CodeQL Result
+            // ==========================================
+            // 2. Process CodeQL SARIF Reports
+            // ==========================================
             markdown += `### 🔍 CodeQL Static Analysis (SAST)\n`;
-            const codeqlResult = "${{ needs.codeql-analysis.result }}";
 
-            if (codeqlResult === "success") {
-              markdown += `✅ **CodeQL Analysis Passed!** No security vulnerabilities detected.\n`;
-            } else if (codeqlResult === "failure") {
-              markdown += `🚨 **CodeQL Analysis Failed!** New vulnerabilities detected in code. Check line annotations under **Files Changed** or the repository **Security** tab.\n`;
-            } else {
-              markdown += `⚠️ CodeQL scan completed with status: **${codeqlResult}**\n`;
+            const sarifDir = 'sarif-reports';
+            let codeqlAlerts = [];
+
+            if (fs.existsSync(sarifDir)) {
+              const sarifFiles = fs.readdirSync(sarifDir).filter(f => f.endsWith('.sarif'));
+
+              sarifFiles.forEach(file => {
+                try {
+                  const sarifContent = JSON.parse(fs.readFileSync(path.join(sarifDir, file), 'utf8'));
+                  const runs = sarifContent.runs || [];
+
+                  runs.forEach(run => {
+                    const results = run.results || [];
+                    const rules = (run.tool && run.tool.driver && run.tool.driver.rules) ? run.tool.driver.rules : [];
+
+                    results.forEach(res => {
+                      const ruleId = res.ruleId || 'Unknown Rule';
+                      const message = (res.message && res.message.text) ? res.message.text.split('\n')[0] : 'Security Finding';
+
+                      // 1. Locate the rule definition metadata
+                      const ruleMatch = rules.find(r => r.id === ruleId);
+                      const props = (ruleMatch && ruleMatch.properties) ? ruleMatch.properties : {};
+
+                      // 2. Extract CVSS / Security Severity score (0.0 - 10.0) or fallback severity
+                      const secScore = props['security-severity'] ? parseFloat(props['security-severity']) : null;
+                      const rawSeverity = props['problem.severity'] || res.level || 'warning';
+
+                      // 3. Map to accurate human-readable badges
+                      let badge = '🟡 **MEDIUM**';
+
+                      if (secScore !== null) {
+                        if (secScore >= 9.0) {
+                          badge = '🔴 **CRITICAL**';
+                        } else if (secScore >= 7.0) {
+                          badge = '🔴 **HIGH**';
+                        } else if (secScore >= 4.0) {
+                          badge = '🟡 **MEDIUM**';
+                        } else {
+                          badge = '⚪ **LOW**';
+                        }
+                      } else {
+                        const sevLower = rawSeverity.toLowerCase();
+                        if (sevLower === 'error') {
+                          badge = '🔴 **HIGH**';
+                        } else if (sevLower === 'warning') {
+                          badge = '🟡 **MEDIUM**';
+                        } else if (sevLower === 'recommendation' || sevLower === 'note') {
+                          badge = '⚪ **LOW**';
+                        }
+                      }
+
+                      // 4. Extract location details
+                      let locFile = 'N/A';
+                      let locLine = 'N/A';
+                      if (res.locations && res.locations[0] && res.locations[0].physicalLocation) {
+                        const phys = res.locations[0].physicalLocation;
+                        if (phys.artifactLocation && phys.artifactLocation.uri) {
+                          locFile = phys.artifactLocation.uri;
+                        }
+                        if (phys.region && phys.region.startLine) {
+                          locLine = phys.region.startLine;
+                        }
+                      }
+
+                      codeqlAlerts.push({
+                        ruleId,
+                        message,
+                        badge,
+                        file: locFile,
+                        line: locLine
+                      });
+                    });
+                  });
+                } catch (err) {
+                  core.warning(`Failed to parse SARIF file ${file}: ${err.message}`);
+                }
+              });
             }
 
-            markdown += `\n> *Report generated automatically by GitHub Actions.*`;
+            if (codeqlAlerts.length > 0) {
+              markdown += `🚨 **${codeqlAlerts.length} vulnerability(ies) detected!**\n\n`;
+              markdown += '| Severity | Rule / Vulnerability | File | Line |\n| :--- | :--- | :--- | :--- |\n';
+
+              codeqlAlerts.forEach(alert => {
+                markdown += `| ${alert.badge} | **${alert.ruleId}**<br>_${alert.message}_ | \`${alert.file}\` | \`${alert.line}\` |\n`;
+              });
+
+              markdown += `\n> Check the **Files Changed** tab or the repository **Security** tab for complete taint-trace details.`;
+            } else {
+              markdown += `✅ **CodeQL Analysis Passed!** No security vulnerabilities detected.\n`;
+            }
+
+            markdown += `\n\n> *Report generated automatically by GitHub Actions.*`;
             core.setOutput('comment', markdown);
 
       - name: Post PR Comment
