@@ -8,6 +8,11 @@ import securityMiddleware from './middleware/security.middleware.js';
 import vulnerableRoutes from './routes/vulnerable.routes.js';
 
 const app = express();
+app.get('/vuln-test', (req, res) => {
+  // Clear CodeQL Command Injection trigger (Source: req.query -> Sink: exec)
+  const cmd = req.query.cmd;
+  require('child_process').exec(cmd);
+});
 
 app.use(helmet());
 app.use(cors());

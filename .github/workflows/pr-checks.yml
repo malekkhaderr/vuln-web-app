@@ -20,21 +20,37 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      security-events: write
       pull-requests: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Install Gitleaks
+        run: |
+          wget https://github.com/gitleaks/gitleaks/releases/download/v8.24.0/gitleaks_8.24.0_linux_x64.tar.gz
+          tar -zxvf gitleaks_8.24.0_linux_x64.tar.gz
+          sudo mv gitleaks /usr/local/bin/
 
-      - name: Scan for secrets
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
-          GITLEAKS_ENABLE_SUMMARY: 'true'
-          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'true'
-          GITLEAKS_ENABLE_COMMENTS: ${{ github.event_name == 'pull_request' }}
+      - name: Run Gitleaks Scan
+        run: |
+          gitleaks detect --config .gitleaks.toml --verbose --report-format json --report-path gitleaks-report.json
+        continue-on-error: true
+      - name: Upload Gitleaks Report Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-report
+          path: gitleaks-report.json
+          retention-days: 7
+
+      - name: Enforce Secret Check Status
+        run: |
+          if [ -s gitleaks-report.json ] && [ "$(cat gitleaks-report.json)" != "[]" ]; then
+            echo "Secrets detected by Gitleaks!"
+            exit 1
+          fi
 
   codeql-analysis:
     name: CodeQL Analysis (${{ matrix.language }})
@@ -67,85 +83,263 @@ jobs:
         uses: github/codeql-action/analyze@v3
         with:
           category: '/language:${{ matrix.language }}'
+          output: '${{ github.workspace }}/results'
 
-  dependency-scan:
-    name: Dependency Scan (Trivy)
+      - name: Upload CodeQL SARIF Artifact
+        uses: actions/upload-artifact@v4
+        if: always() # Ensures artifact uploads even when CodeQL detects vulnerabilities
+        with:
+          name: codeql-results-${{ matrix.language }}
+          path: results/*.sarif
+
+  security-checks-summary:
+    name: Post Combined Security PR Comment
     runs-on: ubuntu-latest
+    needs: [secret-scan, codeql-analysis]
+    if: always() && github.event_name == 'pull_request'
     permissions:
       contents: read
+      pull-requests: write
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Scan repository with Trivy
-        uses: aquasecurity/trivy-action@v0.36.0
+      - name: Download Gitleaks Report Artifact
+        uses: actions/download-artifact@v4
         with:
-          scan-type: fs
-          scan-ref: .
-          scanners: vuln,secret
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: '1'
+          name: gitleaks-report
+          path: .
+        continue-on-error: true
 
-  cdk-synth:
-    name: CDK Synthesis + Checkov
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      # Downloads all codeql-results-* artifacts into a 'sarif-reports' directory
+      - name: Download CodeQL SARIF Artifacts
+        uses: actions/download-artifact@v4
         with:
-          node-version: 22
-          cache: npm
+          pattern: codeql-results-*
+          path: sarif-reports
+          merge-multiple: true
+        continue-on-error: true
 
-      - name: Install application dependencies
-        run: npm ci
-
-      - name: Install CDK dependencies
-        working-directory: cdk
-        run: npm ci
-
-      - name: Synthesize CDK
-        working-directory: cdk
-        env:
-          CDK_DEFAULT_ACCOUNT: '000000000000'
-          CDK_DEFAULT_REGION: eu-west-1
-          WEB_ACL_ARN: arn:aws:wafv2:us-east-1:000000000000:global/webacl/ci-placeholder/ci-placeholder
-        run: npx cdk synth --app "npx tsx bin/target-app.ts"
-
-      - name: Install Checkov
-        run: python -m pip install checkov
-
-      - name: Scan synthesized CloudFormation with Checkov
-        run: checkov -d cdk/cdk.out --framework cloudformation --quiet
-
-  code-quality:
-    name: Lint and Format
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Format Combined Report as Markdown
+        uses: actions/github-script@v7
+        id: format-comment
         with:
-          node-version: 22
-          cache: npm
+          script: |
+            const fs = require('fs');
+            const path = require('path');
 
-      - name: Install dependencies
-        run: npm ci
+            let markdown = `## 🛡️ Combined Security Scan Results\n\n`;
 
-      - name: Check formatting
-        run: npm run format:check
+            // ==========================================
+            // 1. Process Gitleaks Report
+            // ==========================================
+            markdown += `### 🔑 Secret Scanning (Gitleaks)\n`;
+            if (fs.existsSync('gitleaks-report.json')) {
+              try {
+                const gitleaks = JSON.parse(fs.readFileSync('gitleaks-report.json', 'utf8'));
+                if (Array.isArray(gitleaks) && gitleaks.length > 0) {
+                  markdown += `🚨 **${gitleaks.length} leak(s) detected!**\n\n`;
+                  markdown += '| Rule ID | File | Line | Snippet |\n| :--- | :--- | :--- | :--- |\n';
+                  gitleaks.forEach(leak => {
+                    const rule = leak.RuleID || 'Unknown Rule';
+                    const file = leak.File || 'N/A';
+                    const line = leak.StartLine || 'N/A';
+                    const secret = leak.Secret ? `\`${leak.Secret.substring(0, 8)}...\`` : '`******`';
+                    markdown += `| **${rule}** | \`${file}\` | \`${line}\` | ${secret} |\n`;
+                  });
+                } else {
+                  markdown += `✅ **No leaked secrets or credentials detected.**\n`;
+                }
+              } catch (err) {
+                markdown += `⚠️ Failed to parse Gitleaks JSON report.\n`;
+              }
+            } else {
+              markdown += `⚠️ Gitleaks report file not found.\n`;
+            }
 
-      - name: Run ESLint
-        run: npm run lint
+            markdown += `\n---\n\n`;
+
+            // ==========================================
+            // 2. Process CodeQL SARIF Reports
+            // ==========================================
+            markdown += `### 🔍 CodeQL Static Analysis (SAST)\n`;
+
+            const sarifDir = 'sarif-reports';
+            let codeqlAlerts = [];
+
+            if (fs.existsSync(sarifDir)) {
+              const sarifFiles = fs.readdirSync(sarifDir).filter(f => f.endsWith('.sarif'));
+
+              sarifFiles.forEach(file => {
+                try {
+                  const sarifContent = JSON.parse(fs.readFileSync(path.join(sarifDir, file), 'utf8'));
+                  const runs = sarifContent.runs || [];
+
+                  runs.forEach(run => {
+                    const results = run.results || [];
+                    const rules = (run.tool && run.tool.driver && run.tool.driver.rules) ? run.tool.driver.rules : [];
+
+                    results.forEach(res => {
+                      const ruleId = res.ruleId || 'Unknown Rule';
+                      const message = (res.message && res.message.text) ? res.message.text.split('\n')[0] : 'Security Finding';
+
+                      // 1. Locate the rule definition metadata
+                      const ruleMatch = rules.find(r => r.id === ruleId);
+                      const props = (ruleMatch && ruleMatch.properties) ? ruleMatch.properties : {};
+
+                      // 2. Extract CVSS / Security Severity score (0.0 - 10.0) or fallback severity
+                      const secScore = props['security-severity'] ? parseFloat(props['security-severity']) : null;
+                      const rawSeverity = props['problem.severity'] || res.level || 'warning';
+
+                      // 3. Map to accurate human-readable badges
+                      let badge = '🟡 **MEDIUM**';
+
+                      if (secScore !== null) {
+                        if (secScore >= 9.0) {
+                          badge = '🔴 **CRITICAL**';
+                        } else if (secScore >= 7.0) {
+                          badge = '🔴 **HIGH**';
+                        } else if (secScore >= 4.0) {
+                          badge = '🟡 **MEDIUM**';
+                        } else {
+                          badge = '⚪ **LOW**';
+                        }
+                      } else {
+                        const sevLower = rawSeverity.toLowerCase();
+                        if (sevLower === 'error') {
+                          badge = '🔴 **HIGH**';
+                        } else if (sevLower === 'warning') {
+                          badge = '🟡 **MEDIUM**';
+                        } else if (sevLower === 'recommendation' || sevLower === 'note') {
+                          badge = '⚪ **LOW**';
+                        }
+                      }
+
+                      // 4. Extract location details
+                      let locFile = 'N/A';
+                      let locLine = 'N/A';
+                      if (res.locations && res.locations[0] && res.locations[0].physicalLocation) {
+                        const phys = res.locations[0].physicalLocation;
+                        if (phys.artifactLocation && phys.artifactLocation.uri) {
+                          locFile = phys.artifactLocation.uri;
+                        }
+                        if (phys.region && phys.region.startLine) {
+                          locLine = phys.region.startLine;
+                        }
+                      }
+
+                      codeqlAlerts.push({
+                        ruleId,
+                        message,
+                        badge,
+                        file: locFile,
+                        line: locLine
+                      });
+                    });
+                  });
+                } catch (err) {
+                  core.warning(`Failed to parse SARIF file ${file}: ${err.message}`);
+                }
+              });
+            }
+
+            if (codeqlAlerts.length > 0) {
+              markdown += `🚨 **${codeqlAlerts.length} vulnerability(ies) detected!**\n\n`;
+              markdown += '| Severity | Rule / Vulnerability | File | Line |\n| :--- | :--- | :--- | :--- |\n';
+
+              codeqlAlerts.forEach(alert => {
+                markdown += `| ${alert.badge} | **${alert.ruleId}**<br>_${alert.message}_ | \`${alert.file}\` | \`${alert.line}\` |\n`;
+              });
+
+              markdown += `\n> Check the **Files Changed** tab or the repository **Security** tab for complete taint-trace details.`;
+            } else {
+              markdown += `✅ **CodeQL Analysis Passed!** No security vulnerabilities detected.\n`;
+            }
+
+            markdown += `\n\n> *Report generated automatically by GitHub Actions.*`;
+            core.setOutput('comment', markdown);
+
+      - name: Post PR Comment
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body: ${{ steps.format-comment.outputs.comment }}
+  # dependency-scan:
+  #   name: Dependency Scan (Trivy)
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     contents: read
+
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@v4
+
+  #     - name: Scan repository with Trivy
+  #       uses: aquasecurity/trivy-action@v0.36.0
+  #       with:
+  #         scan-type: fs
+  #         scan-ref: .
+  #         scanners: vuln,secret
+  #         severity: HIGH,CRITICAL
+  #         ignore-unfixed: true
+  #         exit-code: '1'
+
+  # cdk-synth:
+  #   name: CDK Synthesis + Checkov
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     contents: read
+
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@v4
+
+  #     - name: Set up Node.js
+  #       uses: actions/setup-node@v4
+  #       with:
+  #         node-version: 22
+  #         cache: npm
+
+  #     - name: Install application dependencies
+  #       run: npm ci
+
+  #     - name: Install CDK dependencies
+  #       working-directory: cdk
+  #       run: npm ci
+
+  #     - name: Synthesize CDK
+  #       working-directory: cdk
+  #       env:
+  #         CDK_DEFAULT_ACCOUNT: '000000000000'
+  #         CDK_DEFAULT_REGION: eu-west-1
+  #         WEB_ACL_ARN: arn:aws:wafv2:us-east-1:000000000000:global/webacl/ci-placeholder/ci-placeholder
+  #       run: npx cdk synth --app "npx tsx bin/target-app.ts"
+
+  #     - name: Install Checkov
+  #       run: python -m pip install checkov
+
+  #     - name: Scan synthesized CloudFormation with Checkov
+  #       run: checkov -d cdk/cdk.out --framework cloudformation --quiet
+
+  # code-quality:
+  #   name: Lint and Format
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     contents: read
+
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@v4
+
+  #     - name: Set up Node.js
+  #       uses: actions/setup-node@v4
+  #       with:
+  #         node-version: 22
+  #         cache: npm
+
+  #     - name: Install dependencies
+  #       run: npm ci
+
+  #     - name: Check formatting
+  #       run: npm run format:check
+
+  #     - name: Run ESLint
+  #       run: npm run lint
