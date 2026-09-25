@@ -81,14 +81,16 @@ jobs:
       - name: Analyze with CodeQL
         uses: github/codeql-action/analyze@v3
         with:
-          category: '/language:${{ matrix.language }}-v2'
+          category: '/language:${{ matrix.language }}'
+          output: '${{ github.workspace }}/results'
+
       - name: Upload CodeQL SARIF Artifact
         uses: actions/upload-artifact@v4
         if: always() # Ensures artifact uploads even when CodeQL detects vulnerabilities
         with:
           name: codeql-results-${{ matrix.language }}
-          path: '../results/*.sarif'
-          retention-days: 7
+          path: results/*.sarif
+
   security-checks-summary:
     name: Post Combined Security PR Comment
     runs-on: ubuntu-latest
