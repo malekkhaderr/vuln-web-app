@@ -44,6 +44,19 @@ jobs:
           name: gitleaks-report
           path: gitleaks-report.json
           retention-days: 7
+      - name: Convert JSON to SARIF for Security Tab
+        if: always()
+        run: |
+          gitleaks detect --config .gitleaks.toml --report-format sarif --report-path gitleaks-report.sarif
+        continue-on-error: true
+
+      # Step 2: Upload SARIF to GitHub Code Scanning
+      - name: Upload SARIF to Security Tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: gitleaks-report.sarif
+          category: gitleaks
 
       - name: Enforce Secret Check Status
         run: |
