@@ -165,7 +165,6 @@ jobs:
             let codeqlAlerts = [];
 
             if (fs.existsSync(sarifDir)) {
-              // Find all .sarif files in the downloaded artifact folder
               const sarifFiles = fs.readdirSync(sarifDir).filter(f => f.endsWith('.sarif'));
 
               sarifFiles.forEach(file => {
@@ -181,14 +180,39 @@ jobs:
                       const ruleId = res.ruleId || 'Unknown Rule';
                       const message = (res.message && res.message.text) ? res.message.text.split('\n')[0] : 'Security Finding';
 
-                      // Extract rule level/severity
-                      let level = res.level || 'warning';
+                      // 1. Locate the rule definition metadata
                       const ruleMatch = rules.find(r => r.id === ruleId);
-                      if (ruleMatch && ruleMatch.defaultConfiguration && ruleMatch.defaultConfiguration.level) {
-                        level = ruleMatch.defaultConfiguration.level;
+                      const props = (ruleMatch && ruleMatch.properties) ? ruleMatch.properties : {};
+
+                      // 2. Extract CVSS / Security Severity score (0.0 - 10.0) or fallback severity
+                      const secScore = props['security-severity'] ? parseFloat(props['security-severity']) : null;
+                      const rawSeverity = props['problem.severity'] || res.level || 'warning';
+
+                      // 3. Map to accurate human-readable badges
+                      let badge = '🟡 **MEDIUM**';
+
+                      if (secScore !== null) {
+                        if (secScore >= 9.0) {
+                          badge = '🔴 **CRITICAL**';
+                        } else if (secScore >= 7.0) {
+                          badge = '🔴 **HIGH**';
+                        } else if (secScore >= 4.0) {
+                          badge = '🟡 **MEDIUM**';
+                        } else {
+                          badge = '⚪ **LOW**';
+                        }
+                      } else {
+                        const sevLower = rawSeverity.toLowerCase();
+                        if (sevLower === 'error') {
+                          badge = '🔴 **HIGH**';
+                        } else if (sevLower === 'warning') {
+                          badge = '🟡 **MEDIUM**';
+                        } else if (sevLower === 'recommendation' || sevLower === 'note') {
+                          badge = '⚪ **LOW**';
+                        }
                       }
 
-                      // Extract Location details
+                      // 4. Extract location details
                       let locFile = 'N/A';
                       let locLine = 'N/A';
                       if (res.locations && res.locations[0] && res.locations[0].physicalLocation) {
@@ -204,7 +228,7 @@ jobs:
                       codeqlAlerts.push({
                         ruleId,
                         message,
-                        level: level.toUpperCase(),
+                        badge,
                         file: locFile,
                         line: locLine
                       });
@@ -221,8 +245,7 @@ jobs:
               markdown += '| Severity | Rule / Vulnerability | File | Line |\n| :--- | :--- | :--- | :--- |\n';
 
               codeqlAlerts.forEach(alert => {
-                const severityBadge = alert.level === 'ERROR' ? '🔴 **ERROR**' : '🟡 **WARNING**';
-                markdown += `| ${severityBadge} | **${alert.ruleId}**<br>_${alert.message}_ | \`${alert.file}\` | \`${alert.line}\` |\n`;
+                markdown += `| ${alert.badge} | **${alert.ruleId}**<br>_${alert.message}_ | \`${alert.file}\` | \`${alert.line}\` |\n`;
               });
 
               markdown += `\n> Check the **Files Changed** tab or the repository **Security** tab for complete taint-trace details.`;
