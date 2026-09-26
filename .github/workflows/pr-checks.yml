@@ -56,7 +56,7 @@ jobs:
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: gitleaks-report.sarif
-          category: "gitleaks-secret-scan"
+          category: 'gitleaks-secret-scan'
 
       - name: Enforce Secret Check Status
         run: |
@@ -104,6 +104,66 @@ jobs:
         with:
           name: codeql-results-${{ matrix.language }}
           path: results/*.sarif
+  dependency-scan:
+    name: Dependency Scan (Trivy)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Trivy CLI
+        run: |
+          wget -qO- https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update && sudo apt-get install -y trivy
+
+      - name: Run Trivy Scan (JSON Report)
+        run: |
+          trivy fs . \
+            --scanners vuln,secret \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --format json \
+            --output trivy-report.json
+        continue-on-error: true
+
+      - name: Run Trivy Scan (SARIF Report for Security Tab)
+        if: always()
+        run: |
+          trivy fs . \
+            --scanners vuln,secret \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --format sarif \
+            --output trivy-report.sarif
+        continue-on-error: true
+
+      - name: Upload Trivy Report Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report
+          path: trivy-report.json
+          retention-days: 7
+
+      - name: Upload Trivy SARIF to Security Tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-report.sarif
+          category: trivy-dependency-scan
+
+      - name: Enforce Dependency Check Status
+        run: |
+          if [ -s trivy-report.json ] && jq -e '.Results[] | select(.Vulnerabilities != null or .Secrets != null)' trivy-report.json > /dev/null 2>&1; then
+            echo "Vulnerabilities or Secrets detected by Trivy!"
+            exit 1
+          fi
 
   security-checks-summary:
     name: Post Combined Security PR Comment
@@ -130,6 +190,13 @@ jobs:
           path: sarif-reports
           merge-multiple: true
         continue-on-error: true
+
+      - name: Download Trivy Artifact
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: trivy-report
+          path: .
 
       - name: Format Combined Report as Markdown
         uses: actions/github-script@v7
@@ -267,6 +334,79 @@ jobs:
               markdown += `✅ **CodeQL Analysis Passed!** No security vulnerabilities detected.\n`;
             }
 
+            markdown += `\n---\n\n`;
+
+            // ==========================================
+            // 3. Process Trivy Report
+            // ==========================================
+            markdown += `### 📦 Dependency & Vulnerability Scan (Trivy)\n`;
+
+            if (fs.existsSync('trivy-report.json')) {
+              try {
+                const trivyData = JSON.parse(fs.readFileSync('trivy-report.json', 'utf8'));
+                const results = trivyData.Results || [];
+                let trivyAlerts = [];
+
+                results.forEach(res => {
+                  const target = res.Target || 'Unknown Target';
+
+                  // Parse Vulnerabilities
+                  if (Array.isArray(res.Vulnerabilities) && res.Vulnerabilities.length > 0) {
+                    res.Vulnerabilities.forEach(vuln => {
+                      const sev = vuln.Severity ? vuln.Severity.toUpperCase() : 'UNKNOWN';
+                      let badge = '🟡 **MEDIUM**';
+                      if (sev === 'CRITICAL' || sev === 'HIGH') badge = `🔴 **${sev}**`;
+                      else if (sev === 'LOW') badge = '⚪ **LOW**';
+
+                      trivyAlerts.push({
+                        type: 'Vulnerability',
+                        severity: badge,
+                        id: vuln.VulnerabilityID || 'N/A',
+                        pkg: vuln.PkgName || 'N/A',
+                        installedVersion: vuln.InstalledVersion || 'N/A',
+                        fixedVersion: vuln.FixedVersion || 'None',
+                        target
+                      });
+                    });
+                  }
+
+                  // Parse Secrets (if detected by Trivy)
+                  if (Array.isArray(res.Secrets) && res.Secrets.length > 0) {
+                    res.Secrets.forEach(sec => {
+                      const sev = sec.Severity ? sec.Severity.toUpperCase() : 'UNKNOWN';
+                      let badge = '🔴 **HIGH**';
+                      if (sev === 'CRITICAL') badge = '🔴 **CRITICAL**';
+
+                      trivyAlerts.push({
+                        type: 'Secret',
+                        severity: badge,
+                        id: sec.RuleID || 'Secret Detected',
+                        pkg: sec.Title || 'N/A',
+                        installedVersion: `Line ${sec.StartLine || 'N/A'}`,
+                        fixedVersion: 'N/A',
+                        target
+                      });
+                    });
+                  }
+                });
+
+                if (trivyAlerts.length > 0) {
+                  markdown += `🚨 **${trivyAlerts.length} dependency finding(s) detected!**\n\n`;
+                  markdown += '| Severity | Type | ID / Rule | Package / File | Fixed Version |\n| :--- | :--- | :--- | :--- | :--- |\n';
+
+                  trivyAlerts.forEach(item => {
+                    markdown += `| ${item.severity} | ${item.type} | **${item.id}** | \`${item.pkg}\` (\`${item.target}\`) | \`${item.fixedVersion}\` |\n`;
+                  });
+                } else {
+                  markdown += `✅ **No high/critical vulnerabilities or secrets found in dependencies.**\n`;
+                }
+              } catch (err) {
+                markdown += `⚠️ Failed to parse Trivy JSON report.\n`;
+              }
+            } else {
+              markdown += `⚠️ Trivy report file not found.\n`;
+            }
+
             markdown += `\n\n> *Report generated automatically by GitHub Actions.*`;
             core.setOutput('comment', markdown);
 
@@ -275,6 +415,7 @@ jobs:
         with:
           issue-number: ${{ github.event.pull_request.number }}
           body: ${{ steps.format-comment.outputs.comment }}
+
   # dependency-scan:
   #   name: Dependency Scan (Trivy)
   #   runs-on: ubuntu-latest
