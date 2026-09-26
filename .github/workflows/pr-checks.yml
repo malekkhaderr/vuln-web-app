@@ -206,14 +206,16 @@ jobs:
           checkov -d cdk/cdk.out \
             --framework cloudformation \
             --output json \
-            --output-file-path checkov-report.json \
+            --output-file-path . \
             --quiet || true
+          mv results_json.json checkov-report.json
 
           checkov -d cdk/cdk.out \
             --framework cloudformation \
             --output sarif \
-            --output-file-path checkov-report.sarif \
+            --output-file-path . \
             --quiet || true
+          mv results_sarif.sarif checkov-report.sarif
 
       - name: Upload Checkov Report Artifact
         if: always()
