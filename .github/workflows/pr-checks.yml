@@ -202,37 +202,34 @@ jobs:
 
       - name: Scan synthesized CloudFormation with Checkov (JSON & SARIF)
         run: |
-          # Generate JSON report
+          # Output to dedicated folder paths
           checkov -d cdk/cdk.out \
             --framework cloudformation \
             --output json \
-            --output-file-path checkov-report.json \
+            --output-file-path checkov_json_out \
             --quiet || true
+
           checkov -d cdk/cdk.out \
             --framework cloudformation \
             --output sarif \
-            --output-file-path checkov-report.sarif \
+            --output-file-path checkov_sarif_out \
             --quiet || true
 
       - name: Normalize Checkov Output Files
         if: always()
         run: |
-          # If Checkov created directories for the outputs, extract the inner files
-          if [ -d "checkov-report.sarif" ]; then
-            mv checkov-report.sarif/*.sarif checkov-report-final.sarif 2>/dev/null || true
-            rm -rf checkov-report.sarif
-            mv checkov-report-final.sarif checkov-report.sarif
+          # Extract SARIF file from generated output directory
+          if [ -d "checkov_sarif_out" ]; then
+            cp checkov_sarif_out/* checkov-report.sarif 2>/dev/null || true
           fi
 
-          if [ -d "checkov-report.json" ]; then
-            mv checkov-report.json/*.json checkov-report-final.json 2>/dev/null || true
-            rm -rf checkov-report.json
-            mv checkov-report-final.json checkov-report.json
+          # Extract JSON file from generated output directory
+          if [ -d "checkov_json_out" ]; then
+            cp checkov_json_out/* checkov-report.json 2>/dev/null || true
           fi
 
-          # Verification output for GitHub Action logs
+          # Verify files exist for debugging
           ls -la checkov-report.sarif checkov-report.json
-
       - name: Upload Checkov Report Artifact
         if: always()
         uses: actions/upload-artifact@v4
