@@ -212,8 +212,20 @@ jobs:
       - name: Normalize Checkov Output Files
         if: always()
         run: |
-          if [ -f "results_json.json" ]; then mv results_json.json checkov-report.json; fi
-          if [ -f "results_sarif.sarif" ]; then mv results_sarif.sarif checkov-report.sarif; fi
+          # Locate SARIF file wherever Checkov created it and move to root
+          SARIF_FILE=$(find . -maxdepth 3 -type f -name "*sarif*.sarif" -o -name "*results_sarif*.sarif" | head -n 1)
+          if [ -n "$SARIF_FILE" ]; then
+            mv "$SARIF_FILE" checkov-report.sarif
+          fi
+
+          # Locate JSON file wherever Checkov created it and move to root
+          JSON_FILE=$(find . -maxdepth 3 -type f -name "*json*.json" -o -name "*results_json*.json" | head -n 1)
+          if [ -n "$JSON_FILE" ]; then
+            mv "$JSON_FILE" checkov-report.json
+          fi
+
+          # Debug check to confirm file presence in runner logs
+          ls -la checkov-report.* || echo "Checkov output files not found!"
 
       - name: Upload Checkov Report Artifact
         if: always()
@@ -239,7 +251,7 @@ jobs:
   security-checks-summary:
     name: Post Combined Security PR Comment
     runs-on: ubuntu-latest
-    needs: [secret-scan, codeql-analysis]
+    needs: [secret-scan, codeql-analysis, dependency-scan, cdk-synth]
     if: always() && github.event_name == 'pull_request'
     permissions:
       contents: read
