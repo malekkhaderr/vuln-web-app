@@ -164,6 +164,82 @@ jobs:
             echo "Vulnerabilities or Secrets detected by Trivy!"
             exit 1
           fi
+  cdk-synth:
+    name: CDK Synthesis + Checkov (IaC Scan)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install application dependencies
+        run: npm ci
+
+      - name: Install CDK dependencies
+        working-directory: cdk
+        run: npm ci
+
+      - name: Synthesize CDK
+        working-directory: cdk
+        env:
+          CDK_DEFAULT_ACCOUNT: '000000000000'
+          CDK_DEFAULT_REGION: eu-west-1
+          WEB_ACL_ARN: arn:aws:wafv2:us-east-1:000000000000:global/webacl/ci-placeholder/ci-placeholder
+        run: npx cdk synth --app "npx tsx bin/target-app.ts"
+
+      - name: Install Checkov
+        run: python -m pip install checkov
+
+      - name: Scan synthesized CloudFormation with Checkov (JSON & SARIF)
+        run: |
+          checkov -d cdk/cdk.out --framework cloudformation --output json --output-file-path checkov-report.json --quiet || true
+          checkov -d cdk/cdk.out --framework cloudformation --output sarif --output-file-path checkov-report.sarif --quiet || true
+
+      - name: Normalize Checkov JSON output
+        if: always()
+        run: |
+          if [ -f "checkov-report.json/results_json.json" ]; then
+            mv checkov-report.json/results_json.json checkov-report.json
+          fi
+
+      - name: Normalize Checkov SARIF output
+        if: always()
+        run: |
+          if [ -f "checkov-report.sarif/results_sarif.sarif" ]; then
+            mv checkov-report.sarif/results_sarif.sarif checkov-report.sarif
+          fi
+
+      - name: Upload Checkov Report Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkov-report
+          path: checkov-report.json
+          retention-days: 7
+
+      - name: Upload Checkov SARIF to Security Tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: checkov-report.sarif
+          category: checkov-iac-scan
+
+      - name: Enforce Checkov IaC Check Status
+        run: |
+          if [ -s checkov-report.json ] && jq -e '.results.failed_checks | length > 0' checkov-report.json > /dev/null 2>&1; then
+            echo "Infrastructure security misconfigurations detected by Checkov!"
+            exit 1
+          fi
 
   security-checks-summary:
     name: Post Combined Security PR Comment
@@ -197,6 +273,12 @@ jobs:
         with:
           name: trivy-report
           path: .
+      - name: Download Checkov Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: checkov-report
+          path: .
+        continue-on-error: true
 
       - name: Format Combined Report as Markdown
         uses: actions/github-script@v7
@@ -261,39 +343,26 @@ jobs:
                       const ruleId = res.ruleId || 'Unknown Rule';
                       const message = (res.message && res.message.text) ? res.message.text.split('\n')[0] : 'Security Finding';
 
-                      // 1. Locate the rule definition metadata
                       const ruleMatch = rules.find(r => r.id === ruleId);
                       const props = (ruleMatch && ruleMatch.properties) ? ruleMatch.properties : {};
 
-                      // 2. Extract CVSS / Security Severity score (0.0 - 10.0) or fallback severity
                       const secScore = props['security-severity'] ? parseFloat(props['security-severity']) : null;
                       const rawSeverity = props['problem.severity'] || res.level || 'warning';
 
-                      // 3. Map to accurate human-readable badges
                       let badge = '🟡 **MEDIUM**';
 
                       if (secScore !== null) {
-                        if (secScore >= 9.0) {
-                          badge = '🔴 **CRITICAL**';
-                        } else if (secScore >= 7.0) {
-                          badge = '🔴 **HIGH**';
-                        } else if (secScore >= 4.0) {
-                          badge = '🟡 **MEDIUM**';
-                        } else {
-                          badge = '⚪ **LOW**';
-                        }
+                        if (secScore >= 9.0) badge = '🔴 **CRITICAL**';
+                        else if (secScore >= 7.0) badge = '🔴 **HIGH**';
+                        else if (secScore >= 4.0) badge = '🟡 **MEDIUM**';
+                        else badge = '⚪ **LOW**';
                       } else {
                         const sevLower = rawSeverity.toLowerCase();
-                        if (sevLower === 'error') {
-                          badge = '🔴 **HIGH**';
-                        } else if (sevLower === 'warning') {
-                          badge = '🟡 **MEDIUM**';
-                        } else if (sevLower === 'recommendation' || sevLower === 'note') {
-                          badge = '⚪ **LOW**';
-                        }
+                        if (sevLower === 'error') badge = '🔴 **HIGH**';
+                        else if (sevLower === 'warning') badge = '🟡 **MEDIUM**';
+                        else if (sevLower === 'recommendation' || sevLower === 'note') badge = '⚪ **LOW**';
                       }
 
-                      // 4. Extract location details
                       let locFile = 'N/A';
                       let locLine = 'N/A';
                       if (res.locations && res.locations[0] && res.locations[0].physicalLocation) {
@@ -306,13 +375,7 @@ jobs:
                         }
                       }
 
-                      codeqlAlerts.push({
-                        ruleId,
-                        message,
-                        badge,
-                        file: locFile,
-                        line: locLine
-                      });
+                      codeqlAlerts.push({ ruleId, message, badge, file: locFile, line: locLine });
                     });
                   });
                 } catch (err) {
@@ -324,11 +387,9 @@ jobs:
             if (codeqlAlerts.length > 0) {
               markdown += `🚨 **${codeqlAlerts.length} vulnerability(ies) detected!**\n\n`;
               markdown += '| Severity | Rule / Vulnerability | File | Line |\n| :--- | :--- | :--- | :--- |\n';
-
               codeqlAlerts.forEach(alert => {
                 markdown += `| ${alert.badge} | **${alert.ruleId}**<br>_${alert.message}_ | \`${alert.file}\` | \`${alert.line}\` |\n`;
               });
-
               markdown += `\n> Check the **Files Changed** tab or the repository **Security** tab for complete taint-trace details.`;
             } else {
               markdown += `✅ **CodeQL Analysis Passed!** No security vulnerabilities detected.\n`;
@@ -350,7 +411,6 @@ jobs:
                 results.forEach(res => {
                   const target = res.Target || 'Unknown Target';
 
-                  // Parse Vulnerabilities
                   if (Array.isArray(res.Vulnerabilities) && res.Vulnerabilities.length > 0) {
                     res.Vulnerabilities.forEach(vuln => {
                       const sev = vuln.Severity ? vuln.Severity.toUpperCase() : 'UNKNOWN';
@@ -363,14 +423,12 @@ jobs:
                         severity: badge,
                         id: vuln.VulnerabilityID || 'N/A',
                         pkg: vuln.PkgName || 'N/A',
-                        installedVersion: vuln.InstalledVersion || 'N/A',
-                        fixedVersion: vuln.FixedVersion || 'None',
-                        target
+                        target,
+                        fixedVersion: vuln.FixedVersion || 'None'
                       });
                     });
                   }
 
-                  // Parse Secrets (if detected by Trivy)
                   if (Array.isArray(res.Secrets) && res.Secrets.length > 0) {
                     res.Secrets.forEach(sec => {
                       const sev = sec.Severity ? sec.Severity.toUpperCase() : 'UNKNOWN';
@@ -382,9 +440,8 @@ jobs:
                         severity: badge,
                         id: sec.RuleID || 'Secret Detected',
                         pkg: sec.Title || 'N/A',
-                        installedVersion: `Line ${sec.StartLine || 'N/A'}`,
-                        fixedVersion: 'N/A',
-                        target
+                        target,
+                        fixedVersion: 'N/A'
                       });
                     });
                   }
@@ -393,7 +450,6 @@ jobs:
                 if (trivyAlerts.length > 0) {
                   markdown += `🚨 **${trivyAlerts.length} dependency finding(s) detected!**\n\n`;
                   markdown += '| Severity | Type | ID / Rule | Package / File | Fixed Version |\n| :--- | :--- | :--- | :--- | :--- |\n';
-
                   trivyAlerts.forEach(item => {
                     markdown += `| ${item.severity} | ${item.type} | **${item.id}** | \`${item.pkg}\` (\`${item.target}\`) | \`${item.fixedVersion}\` |\n`;
                   });
@@ -407,6 +463,50 @@ jobs:
               markdown += `⚠️ Trivy report file not found.\n`;
             }
 
+            markdown += `\n---\n\n`;
+
+            // ==========================================
+            // 4. Process Checkov Report (CDK / IaC)
+            // ==========================================
+            markdown += `### 🏗️ Infrastructure as Code Scan (Checkov / CDK)\n`;
+
+            if (fs.existsSync('checkov-report.json')) {
+              try {
+                const checkovData = JSON.parse(fs.readFileSync('checkov-report.json', 'utf8'));
+                let failedChecks = [];
+
+                if (Array.isArray(checkovData)) {
+                  checkovData.forEach(run => {
+                    if (run.results && Array.isArray(run.results.failed_checks)) {
+                      failedChecks.push(...run.results.failed_checks);
+                    }
+                  });
+                } else if (checkovData.results && Array.isArray(checkovData.results.failed_checks)) {
+                  failedChecks = checkovData.results.failed_checks;
+                }
+
+                if (failedChecks.length > 0) {
+                  markdown += `🚨 **${failedChecks.length} IaC misconfiguration(s) detected!**\n\n`;
+                  markdown += '| Check ID | Description | Resource | Guidance |\n| :--- | :--- | :--- | :--- |\n';
+
+                  failedChecks.forEach(check => {
+                    const checkId = check.check_id || 'N/A';
+                    const name = check.check_name || 'N/A';
+                    const resource = check.resource || 'N/A';
+                    const guidance = check.guideline ? `[Fix Link](${check.guideline})` : 'N/A';
+
+                    markdown += `| **${checkId}** | ${name} | \`${resource}\` | ${guidance} |\n`;
+                  });
+                } else {
+                  markdown += `✅ **No Infrastructure as Code misconfigurations found.**\n`;
+                }
+              } catch (err) {
+                markdown += `⚠️ Failed to parse Checkov JSON report.\n`;
+              }
+            } else {
+              markdown += `⚠️ Checkov report file not found.\n`;
+            }
+
             markdown += `\n\n> *Report generated automatically by GitHub Actions.*`;
             core.setOutput('comment', markdown);
 
@@ -416,62 +516,7 @@ jobs:
           issue-number: ${{ github.event.pull_request.number }}
           body: ${{ steps.format-comment.outputs.comment }}
 
-  # dependency-scan:
-  #   name: Dependency Scan (Trivy)
-  #   runs-on: ubuntu-latest
-  #   permissions:
-  #     contents: read
 
-  #   steps:
-  #     - name: Checkout repository
-  #       uses: actions/checkout@v4
-
-  #     - name: Scan repository with Trivy
-  #       uses: aquasecurity/trivy-action@v0.36.0
-  #       with:
-  #         scan-type: fs
-  #         scan-ref: .
-  #         scanners: vuln,secret
-  #         severity: HIGH,CRITICAL
-  #         ignore-unfixed: true
-  #         exit-code: '1'
-
-  # cdk-synth:
-  #   name: CDK Synthesis + Checkov
-  #   runs-on: ubuntu-latest
-  #   permissions:
-  #     contents: read
-
-  #   steps:
-  #     - name: Checkout repository
-  #       uses: actions/checkout@v4
-
-  #     - name: Set up Node.js
-  #       uses: actions/setup-node@v4
-  #       with:
-  #         node-version: 22
-  #         cache: npm
-
-  #     - name: Install application dependencies
-  #       run: npm ci
-
-  #     - name: Install CDK dependencies
-  #       working-directory: cdk
-  #       run: npm ci
-
-  #     - name: Synthesize CDK
-  #       working-directory: cdk
-  #       env:
-  #         CDK_DEFAULT_ACCOUNT: '000000000000'
-  #         CDK_DEFAULT_REGION: eu-west-1
-  #         WEB_ACL_ARN: arn:aws:wafv2:us-east-1:000000000000:global/webacl/ci-placeholder/ci-placeholder
-  #       run: npx cdk synth --app "npx tsx bin/target-app.ts"
-
-  #     - name: Install Checkov
-  #       run: python -m pip install checkov
-
-  #     - name: Scan synthesized CloudFormation with Checkov
-  #       run: checkov -d cdk/cdk.out --framework cloudformation --quiet
 
   # code-quality:
   #   name: Lint and Format
