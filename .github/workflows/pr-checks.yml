@@ -208,6 +208,13 @@ jobs:
             --output-file-path . \
             --quiet || true
 
+      # ADDED STEP: Rename Checkov output files to match expected artifact and SARIF filenames
+      - name: Normalize Checkov Output Files
+        if: always()
+        run: |
+          if [ -f "results_json.json" ]; then mv results_json.json checkov-report.json; fi
+          if [ -f "results_sarif.sarif" ]; then mv results_sarif.sarif checkov-report.sarif; fi
+
       - name: Upload Checkov Report Artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -225,11 +232,10 @@ jobs:
 
       - name: Enforce Checkov IaC Check Status
         run: |
-          if [ -s checkov-report.json ] && jq -e '.results.failed_checks | length > 0' checkov-report.json > /dev/null 2>&1; then
+          if [ -s checkov-report.json ] && jq -e 'if type == "array" then .[] | .results.failed_checks | length > 0 else .results.failed_checks | length > 0 end' checkov-report.json > /dev/null 2>&1; then
             echo "Infrastructure security misconfigurations detected by Checkov!"
             exit 1
           fi
-
   security-checks-summary:
     name: Post Combined Security PR Comment
     runs-on: ubuntu-latest
@@ -499,14 +505,11 @@ jobs:
             markdown += `\n\n> *Report generated automatically by GitHub Actions.*`;
             core.setOutput('comment', markdown);
 
-
       - name: Post PR Comment
         uses: peter-evans/create-or-update-comment@v4
         with:
           issue-number: ${{ github.event.pull_request.number }}
           body: ${{ steps.format-comment.outputs.comment }}
-
-
 
   # code-quality:
   #   name: Lint and Format
