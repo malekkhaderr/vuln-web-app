@@ -202,30 +202,36 @@ jobs:
 
       - name: Scan synthesized CloudFormation with Checkov (JSON & SARIF)
         run: |
+          # Generate JSON report
           checkov -d cdk/cdk.out \
             --framework cloudformation \
-            --output json --output sarif \
-            --output-file-path . \
+            --output json \
+            --output-file-path checkov-report.json \
+            --quiet || true
+          checkov -d cdk/cdk.out \
+            --framework cloudformation \
+            --output sarif \
+            --output-file-path checkov-report.sarif \
             --quiet || true
 
-      # ADDED STEP: Rename Checkov output files to match expected artifact and SARIF filenames
       - name: Normalize Checkov Output Files
         if: always()
         run: |
-          # Locate SARIF file wherever Checkov created it and move to root
-          SARIF_FILE=$(find . -maxdepth 3 -type f -name "*sarif*.sarif" -o -name "*results_sarif*.sarif" | head -n 1)
-          if [ -n "$SARIF_FILE" ]; then
-            mv "$SARIF_FILE" checkov-report.sarif
+          # If Checkov created directories for the outputs, extract the inner files
+          if [ -d "checkov-report.sarif" ]; then
+            mv checkov-report.sarif/*.sarif checkov-report-final.sarif 2>/dev/null || true
+            rm -rf checkov-report.sarif
+            mv checkov-report-final.sarif checkov-report.sarif
           fi
 
-          # Locate JSON file wherever Checkov created it and move to root
-          JSON_FILE=$(find . -maxdepth 3 -type f -name "*json*.json" -o -name "*results_json*.json" | head -n 1)
-          if [ -n "$JSON_FILE" ]; then
-            mv "$JSON_FILE" checkov-report.json
+          if [ -d "checkov-report.json" ]; then
+            mv checkov-report.json/*.json checkov-report-final.json 2>/dev/null || true
+            rm -rf checkov-report.json
+            mv checkov-report-final.json checkov-report.json
           fi
 
-          # Debug check to confirm file presence in runner logs
-          ls -la checkov-report.* || echo "Checkov output files not found!"
+          # Verification output for GitHub Action logs
+          ls -la checkov-report.sarif checkov-report.json
 
       - name: Upload Checkov Report Artifact
         if: always()
