@@ -206,30 +206,15 @@ jobs:
           checkov -d cdk/cdk.out \
             --framework cloudformation \
             --output json \
-            --output-file-path checkov_json_out \
+            --output-file-path checkov-report.json \
             --quiet || true
 
           checkov -d cdk/cdk.out \
             --framework cloudformation \
             --output sarif \
-            --output-file-path checkov_sarif_out \
+            --output-file-path checkov-report.sarif \
             --quiet || true
 
-      - name: Normalize Checkov Output Files
-        if: always()
-        run: |
-          # Extract SARIF file from generated output directory
-          if [ -d "checkov_sarif_out" ]; then
-            cp checkov_sarif_out/* checkov-report.sarif 2>/dev/null || true
-          fi
-
-          # Extract JSON file from generated output directory
-          if [ -d "checkov_json_out" ]; then
-            cp checkov_json_out/* checkov-report.json 2>/dev/null || true
-          fi
-
-          # Verify files exist for debugging
-          ls -la checkov-report.sarif checkov-report.json
       - name: Upload Checkov Report Artifact
         if: always()
         uses: actions/upload-artifact@v4
