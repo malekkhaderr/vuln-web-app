@@ -95,8 +95,10 @@ jobs:
       - name: Analyze with CodeQL
         uses: github/codeql-action/analyze@v3
         with:
-          category: '/language:${{ matrix.language }}'
-          output: '${{ github.workspace }}/results'
+          output: '${{ github.workspace }}/codeql-results-${{ matrix.language }}.sarif'
+          checkout_path: '.'
+          # category: '/language:${{ matrix.language }}'
+          # output: '${{ github.workspace }}/results'
 
       - name: Upload CodeQL SARIF Artifact
         uses: actions/upload-artifact@v4
