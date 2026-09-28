@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
 import { TargetAppStack } from '../lib/target-app-stack';
 import { PipelineStack } from '../lib/pipeline-stack';

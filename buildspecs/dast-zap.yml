@@ -7,6 +7,10 @@ phases:
       - docker --version
   build:
     commands:
+      - |
+        if [ -f outputs.json ]; then
+          TARGET_URL=$(node -e "try { const o = JSON.parse(require('fs').readFileSync('outputs.json')); console.log(o.TargetAppStack?.CloudFrontUrl || o.TargetAppStack?.HttpApiUrl || ''); } catch(e){}")
+        fi
       - echo "Target endpoint for DAST: ${TARGET_URL}"
       - |
         if [ -n "$TARGET_URL" ]; then
