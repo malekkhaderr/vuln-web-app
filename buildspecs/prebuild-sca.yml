@@ -1,0 +1,12 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - echo "Installing Trivy..."
+      - TRIVY_VERSION="0.51.1"
+      - curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v${TRIVY_VERSION}
+  build:
+    commands:
+      - echo "Running Trivy SCA dependency scan..."
+      - trivy fs --scanners vuln --severity HIGH,CRITICAL --exit-code 1 package-lock.json cdk/package-lock.json

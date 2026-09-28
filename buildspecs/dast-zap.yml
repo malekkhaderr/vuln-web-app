@@ -1,0 +1,19 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - echo "Checking Docker daemon status for OWASP ZAP..."
+      - docker --version
+  build:
+    commands:
+      - echo "Target endpoint for DAST: ${TARGET_URL}"
+      - |
+        if [ -n "$TARGET_URL" ]; then
+          docker run --rm -v $(pwd):/zap/wrk/:rw zaproxy/zap-stable zap-baseline.py -t "$TARGET_URL" -r zap_report.html -I || true
+        else
+          echo "Warning: TARGET_URL is not set. Skipping DAST scan."
+        fi
+artifacts:
+  files:
+    - zap_report.html

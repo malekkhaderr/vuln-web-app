@@ -2,6 +2,7 @@
 import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
 import { TargetAppStack } from '../lib/target-app-stack';
+import { PipelineStack } from '../lib/pipeline-stack';
 
 const app = new cdk.App();
 
@@ -26,3 +27,16 @@ new TargetAppStack(app, 'TargetAppStack', {
   env,
   webAclArn,
 });
+
+const connectionArn = process.env.CODESTAR_CONNECTION_ARN;
+
+if (connectionArn) {
+  new PipelineStack(app, 'PipelineStack', {
+    env,
+    githubOwner: process.env.GITHUB_OWNER || 'malekkhaderr',
+    githubRepo: process.env.GITHUB_REPO || 'vuln-web-app',
+    githubBranch: process.env.GITHUB_BRANCH || 'main',
+    connectionArn,
+    targetAppUrl: process.env.TARGET_APP_URL,
+  });
+}

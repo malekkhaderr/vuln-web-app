@@ -1,0 +1,13 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.11
+    commands:
+      - echo "Installing Semgrep..."
+      - pip install semgrep
+  build:
+    commands:
+      - echo "Running Semgrep SAST scan..."
+      - semgrep scan --config "p/security-audit" --config "p/owasp-top-ten" --error --exclude "node_modules" --exclude "cdk.out" src/
