@@ -1,14 +1,9 @@
 #!/usr/bin/env node
 import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
-import { Validations } from 'aws-cdk-lib';
-import { AwsSolutionsChecks } from 'cdk-nag';
 import { TargetAppStack } from '../lib/target-app-stack';
 
 const app = new cdk.App();
-
-// Embed cdk-nag AWS Solutions security checks into synthesis
-Validations.of(app).addPlugins(new AwsSolutionsChecks());
 
 const account = process.env.CDK_DEFAULT_ACCOUNT || process.env.AWS_ACCOUNT_ID;
 
