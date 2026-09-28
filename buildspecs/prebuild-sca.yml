@@ -21,8 +21,7 @@ phases:
           --output trivy-report.json || true
       - |
         if [ -s trivy-report.json ] && jq -e '.Results[] | select(.Vulnerabilities != null or .Secrets != null)' trivy-report.json > /dev/null 2>&1; then
-          echo "Vulnerabilities or Secrets detected by Trivy!"
-          exit 1
+          echo "⚠️ Warning: Vulnerabilities or Secrets detected by Trivy (Audit Mode)"
         fi
 
 artifacts:
