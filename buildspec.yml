@@ -128,15 +128,9 @@ phases:
           echo "WARNING: ZAP report not found. Skipping DAST evaluation."
         fi
 
-reports:
-  files:
-    - "reports/zap-report.html"
-    - "reports/zap-report.json"
-    - "cdk/cdk.out/**/*"
-  discard-paths: no
-
 artifacts:
   files:
     - "outputs.json"
     - "reports/**/*"
+    - "cdk/cdk.out/**/*"
   discard-paths: no
