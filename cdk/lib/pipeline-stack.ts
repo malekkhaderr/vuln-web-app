@@ -1,23 +1,15 @@
 import * as cdk from 'aws-cdk-lib';
 import * as codebuild from 'aws-cdk-lib/aws-codebuild';
+import * as codepipeline from 'aws-cdk-lib/aws-codepipeline';
+import * as codepipelineActions from 'aws-cdk-lib/aws-codepipeline-actions';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 
 export interface PipelineStackProps extends cdk.StackProps {
-  /**
-   * ARN of the AWS CodeStar Connection to GitHub.
-   * Create this in the AWS Console under CodeBuild > Settings > Connections.
-   */
   readonly githubConnectionArn: string;
-
-  /** GitHub repository owner (e.g., 'malekkhaderr') */
   readonly githubOwner: string;
-
-  /** GitHub repository name (e.g., 'vuln-web-app') */
   readonly githubRepo: string;
-
-  /** Branch that triggers the pipeline on merge (default: 'main') */
   readonly githubBranch?: string;
 }
 
@@ -37,7 +29,7 @@ export class PipelineStack extends cdk.Stack {
     });
 
     // ──────────────────────────────────────────────
-    // 2. Least-Privilege IAM Role for CDK Deployment
+    // 2. Least-Privilege IAM Role for CodeBuild
     // ──────────────────────────────────────────────
     const deployRole = new iam.Role(this, 'CodeBuildDeployRole', {
       assumedBy: new iam.ServicePrincipal('codebuild.amazonaws.com'),
@@ -45,7 +37,7 @@ export class PipelineStack extends cdk.Stack {
         'Least-privilege role for CodeBuild to deploy the TargetAppStack via CDK',
     });
 
-    // CloudFormation permissions — scoped to the TargetAppStack
+    // CloudFormation — scoped to TargetAppStack
     deployRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'CloudFormationDeploy',
@@ -67,7 +59,7 @@ export class PipelineStack extends cdk.Stack {
       })
     );
 
-    // Lambda permissions — create, update, delete functions
+    // Lambda
     deployRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'LambdaDeploy',
@@ -91,7 +83,7 @@ export class PipelineStack extends cdk.Stack {
       })
     );
 
-    // API Gateway permissions
+    // API Gateway
     deployRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'ApiGatewayDeploy',
@@ -106,7 +98,7 @@ export class PipelineStack extends cdk.Stack {
       })
     );
 
-    // CloudFront permissions
+    // CloudFront
     deployRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'CloudFrontDeploy',
@@ -119,18 +111,16 @@ export class PipelineStack extends cdk.Stack {
           'cloudfront:TagResource',
           'cloudfront:UntagResource',
         ],
-        resources: ['*'], // CloudFront does not support resource-level permissions
+        resources: ['*'],
       })
     );
 
-    // IAM PassRole — allow CodeBuild to pass the Lambda execution role
+    // IAM PassRole
     deployRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'IamPassRole',
         actions: ['iam:PassRole'],
-        resources: [
-          `arn:aws:iam::${this.account}:role/TargetAppStack-*`,
-        ],
+        resources: [`arn:aws:iam::${this.account}:role/TargetAppStack-*`],
         conditions: {
           StringEquals: {
             'iam:PassedToService': 'lambda.amazonaws.com',
@@ -139,7 +129,7 @@ export class PipelineStack extends cdk.Stack {
       })
     );
 
-    // IAM role management — CDK creates execution roles for Lambda
+    // IAM Role Management
     deployRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'IamRoleManagement',
@@ -155,13 +145,11 @@ export class PipelineStack extends cdk.Stack {
           'iam:TagRole',
           'iam:UntagRole',
         ],
-        resources: [
-          `arn:aws:iam::${this.account}:role/TargetAppStack-*`,
-        ],
+        resources: [`arn:aws:iam::${this.account}:role/TargetAppStack-*`],
       })
     );
 
-    // SSM Parameter Store — read WAF ACL ARN
+    // SSM — read WAF ACL ARN
     deployRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'SsmReadWafArn',
@@ -172,7 +160,7 @@ export class PipelineStack extends cdk.Stack {
       })
     );
 
-    // STS — CDK needs to call GetCallerIdentity during synthesis
+    // STS
     deployRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'StsGetCallerIdentity',
@@ -181,7 +169,7 @@ export class PipelineStack extends cdk.Stack {
       })
     );
 
-    // S3 — CDK asset staging bucket (CDK bootstrap bucket)
+    // S3 — CDK asset staging bucket
     deployRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'CdkStagingBucket',
@@ -198,18 +186,16 @@ export class PipelineStack extends cdk.Stack {
       })
     );
 
-    // CDK bootstrap — assume the CDK lookup and deploy roles
+    // CDK bootstrap roles
     deployRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'CdkBootstrapRoles',
         actions: ['sts:AssumeRole'],
-        resources: [
-          `arn:aws:iam::${this.account}:role/cdk-*-${this.region}`,
-        ],
+        resources: [`arn:aws:iam::${this.account}:role/cdk-*-${this.region}`],
       })
     );
 
-    // CloudWatch Logs — for Lambda log groups managed by CDK
+    // CloudWatch Logs for Lambda
     deployRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'CloudWatchLogsDeploy',
@@ -229,56 +215,88 @@ export class PipelineStack extends cdk.Stack {
     );
 
     // ──────────────────────────────────────────────
-    // 3. CodeBuild Project
+    // 3. CodeBuild Project (used as the build action in CodePipeline)
     // ──────────────────────────────────────────────
-    const buildProject = new codebuild.Project(this, 'DeployBuildProject', {
-      projectName: 'VulnWebApp-DeployPipeline',
-      description:
-        'DevSecOps pipeline: SAST/SCA → cdk synth (cdk-nag) → Checkov → Deploy → DAST (OWASP ZAP)',
-      role: deployRole,
-
-      source: codebuild.Source.gitHub({
-        owner: props.githubOwner,
-        repo: props.githubRepo,
-        branchOrRef: branch,
-        webhook: true,
-        webhookFilters: [
-          // Trigger only on push (merge) to the target branch
-          codebuild.FilterGroup.inEventOf(
-            codebuild.EventAction.PUSH
-          ).andBranchIs(branch),
-        ],
-      }),
-
-      environment: {
-        buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
-        computeType: codebuild.ComputeType.MEDIUM,
-        privileged: true, // Required for Docker (OWASP ZAP DAST container)
-      },
-
-      buildSpec: codebuild.BuildSpec.fromSourceFilename('buildspec.yml'),
-
-      logging: {
-        cloudWatch: {
-          logGroup: buildLogGroup,
-          enabled: true,
+    const buildProject = new codebuild.PipelineProject(
+      this,
+      'DeployBuildProject',
+      {
+        projectName: 'VulnWebApp-DeployBuild',
+        description:
+          'DevSecOps: SAST/SCA, cdk synth (cdk-nag), Checkov, Deploy, DAST (OWASP ZAP)',
+        role: deployRole,
+        environment: {
+          buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
+          computeType: codebuild.ComputeType.MEDIUM,
+          privileged: true,
         },
-      },
+        buildSpec: codebuild.BuildSpec.fromSourceFilename('buildspec.yml'),
+        logging: {
+          cloudWatch: {
+            logGroup: buildLogGroup,
+            enabled: true,
+          },
+        },
+        timeout: cdk.Duration.minutes(30),
+      }
+    );
 
-      timeout: cdk.Duration.minutes(30),
+    // ──────────────────────────────────────────────
+    // 4. CodePipeline — Source + Build stages
+    // ──────────────────────────────────────────────
+    const sourceOutput = new codepipeline.Artifact('SourceOutput');
+    const buildOutput = new codepipeline.Artifact('BuildOutput');
+
+    const pipeline = new codepipeline.Pipeline(this, 'DeployPipeline', {
+      pipelineName: 'VulnWebApp-DeployPipeline',
+      restartExecutionOnUpdate: true,
+    });
+
+    // Stage 1: Source — pull code from GitHub on merge to main
+    pipeline.addStage({
+      stageName: 'Source',
+      actions: [
+        new codepipelineActions.CodeStarConnectionsSourceAction({
+          actionName: 'GitHub-Source',
+          owner: props.githubOwner,
+          repo: props.githubRepo,
+          branch,
+          connectionArn: props.githubConnectionArn,
+          output: sourceOutput,
+          triggerOnPush: true,
+        }),
+      ],
+    });
+
+    // Stage 2: Build — runs the full DevSecOps buildspec
+    pipeline.addStage({
+      stageName: 'SecurityScan-Build-Deploy',
+      actions: [
+        new codepipelineActions.CodeBuildAction({
+          actionName: 'DevSecOps-Pipeline',
+          project: buildProject,
+          input: sourceOutput,
+          outputs: [buildOutput],
+        }),
+      ],
     });
 
     // ──────────────────────────────────────────────
-    // 4. Stack Outputs
+    // 5. Stack Outputs
     // ──────────────────────────────────────────────
+    new cdk.CfnOutput(this, 'PipelineName', {
+      value: pipeline.pipelineName,
+      description: 'Name of the CodePipeline',
+    });
+
+    new cdk.CfnOutput(this, 'PipelineArn', {
+      value: pipeline.pipelineArn,
+      description: 'ARN of the CodePipeline',
+    });
+
     new cdk.CfnOutput(this, 'CodeBuildProjectName', {
-      value: buildProject.projectName!,
-      description: 'Name of the CodeBuild deployment pipeline project',
-    });
-
-    new cdk.CfnOutput(this, 'CodeBuildProjectArn', {
-      value: buildProject.projectArn,
-      description: 'ARN of the CodeBuild deployment pipeline project',
+      value: buildProject.projectName,
+      description: 'Name of the CodeBuild project used by the pipeline',
     });
 
     new cdk.CfnOutput(this, 'DeployRoleArn', {
