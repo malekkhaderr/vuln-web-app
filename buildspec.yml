@@ -11,122 +11,51 @@ phases:
       nodejs: 22
       python: 3.11
     commands:
-      - echo "=== Phase 1: Installing Dependencies and Security Scanners ==="
-
-      # 1. Global CDK CLI
+      - echo "Installing Dependencies and Security Scanners"
       - npm install -g aws-cdk
-
-      # 2. Checkov (IaC Scanner)
       - python3 -m pip install --upgrade pip
       - pip3 install --no-cache-dir checkov
-
-      # 3. Trivy (SCA & Secret Scanner)
-      - |
-        curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
-        trivy --version
-
-      # 4. Verify tooling versions
+      - curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+      - trivy --version
       - cdk --version
       - checkov --version
       - docker --version
 
   pre_build:
     commands:
-      - echo "=== Phase 2: Pre-Build --- Dependency Installation & Static Security Gates ==="
-
-      # 1. Install application and CDK dependencies
+      - echo "Pre-Build - Dependency Installation and Static Security Gates"
       - echo "Installing root and CDK dependencies..."
       - npm ci
       - cd cdk && npm ci && cd ..
-
-      # 2. Dependency Vulnerability & Secret Scan (Trivy)
       - echo "Running Trivy filesystem and dependency audit..."
       - trivy fs --security-checks vuln,secret --severity $SCAN_SEVERITY_THRESHOLD --exit-code 1 --ignore-unfixed .
 
   build:
     commands:
-      - echo "=== Phase 3: Application Quality, CDK Synthesis & IaC Security Scan ==="
-
-      # 1. Code Quality & Linting
+      - echo "Build - Application Quality, CDK Synthesis, IaC Security Scan"
       - echo "Running linter..."
       - npm run lint
-
-      # 2. Resolve environment variables for CDK synthesis
-      - |
-        export CDK_DEFAULT_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
-        export CDK_DEFAULT_REGION=${AWS_DEFAULT_REGION:-"eu-west-1"}
-        echo "Deploying to account $CDK_DEFAULT_ACCOUNT in region $CDK_DEFAULT_REGION"
-
-      # 3. Fetch the deployed WAF WebACL ARN from SSM Parameter Store
-      # NOTE: Ensure the parameter '/vuln-web-app/waf-acl-arn' exists after WafStack deployment
-      - |
-        export WEB_ACL_ARN=$(aws ssm get-parameter --name "/vuln-web-app/waf-acl-arn" --query "Parameter.Value" --output text --region us-east-1 2>/dev/null || echo "")
-        if [ -z "$WEB_ACL_ARN" ]; then
-          echo "WARNING: WAF ACL ARN not found in SSM. Using placeholder for synthesis-only validation."
-          export WEB_ACL_ARN="arn:aws:wafv2:us-east-1:${CDK_DEFAULT_ACCOUNT}:global/webacl/ci-placeholder/ci-placeholder"
-        fi
-
-      # 4. CDK Synthesis (with embedded cdk-nag security checks)
+      - export CDK_DEFAULT_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+      - export CDK_DEFAULT_REGION=${AWS_DEFAULT_REGION:-eu-west-1}
+      - echo "Deploying to account $CDK_DEFAULT_ACCOUNT in region $CDK_DEFAULT_REGION"
+      - export WEB_ACL_ARN=$(aws ssm get-parameter --name /vuln-web-app/waf-acl-arn --query Parameter.Value --output text --region us-east-1 2>/dev/null || echo "")
+      - if [ -z "$WEB_ACL_ARN" ]; then echo "WAF ACL ARN not found in SSM, using placeholder"; export WEB_ACL_ARN="arn:aws:wafv2:us-east-1:${CDK_DEFAULT_ACCOUNT}:global/webacl/ci-placeholder/ci-placeholder"; fi
       - echo "Synthesizing CloudFormation templates with cdk-nag enforcement..."
-      - cd cdk
-      - npx cdk synth --app "npx tsx bin/target-app.ts" -o cdk.out
-      - cd ..
-
-      # 5. IaC Security Scan with Checkov
+      - cd cdk && npx cdk synth --app "npx tsx bin/target-app.ts" -o cdk.out && cd ..
       - echo "Running Checkov against synthesized CloudFormation templates..."
       - checkov -d cdk/cdk.out --config-file .checkov.yml --framework cloudformation --compact
 
   post_build:
     commands:
-      - echo "=== Phase 4: Deployment & DAST (Dynamic Application Security Testing) ==="
-
-      # 1. Deploy the TargetAppStack to AWS
+      - echo "Post-Build - Deployment and DAST"
       - echo "Deploying TargetAppStack..."
-      - cd cdk
-      - |
-        npx cdk deploy TargetAppStack \
-          --app "npx tsx bin/target-app.ts" \
-          --require-approval never \
-          --outputs-file ../outputs.json
-      - cd ..
-
-      # 2. Extract the deployed CloudFront URL for DAST targeting
-      - |
-        export TARGET_URL=$(cat outputs.json | python3 -c "import sys,json; print(json.load(sys.stdin)['TargetAppStack']['CloudFrontUrl'])")
-        echo "DAST Target URL: $TARGET_URL"
-
-      # 3. DAST Scan --- OWASP ZAP Baseline Scan against the live endpoint
-      - echo "Running OWASP ZAP baseline scan against $TARGET_URL..."
-      - |
-        docker run --rm \
-          -v $(pwd)/reports:/zap/wrk/:rw \
-          zaproxy/zap-stable zap-baseline.py \
-          -t $TARGET_URL \
-          -r zap-report.html \
-          -J zap-report.json \
-          -l WARN || true
-      # NOTE: '|| true' allows the pipeline to continue even if ZAP finds warnings.
-      # Remove '|| true' to enforce a hard gate on DAST findings.
-
-      # 4. Evaluate ZAP results --- fail on HIGH alerts
-      - |
-        if [ -f reports/zap-report.json ]; then
-          HIGH_ALERTS=$(python3 -c "
-        import json
-        with open('reports/zap-report.json') as f:
-            data = json.load(f)
-        alerts = data.get('site', [{}])[0].get('alerts', []) if isinstance(data.get('site'), list) else []
-        high = [a for a in alerts if a.get('riskcode', '0') in ('3', '4')]
-        print(len(high))
-        " 2>/dev/null || echo "0")
-          echo "High/Critical DAST alerts found: $HIGH_ALERTS"
-          if [ "$HIGH_ALERTS" -gt 0 ]; then
-            echo "DAST gate FAILED: $HIGH_ALERTS high-severity vulnerabilities detected."
-            exit 1
-          fi
-        else
-          echo "WARNING: ZAP report not found. Skipping DAST evaluation."
-        fi
+      - cd cdk && npx cdk deploy TargetAppStack --app "npx tsx bin/target-app.ts" --require-approval never --outputs-file ../outputs.json && cd ..
+      - export TARGET_URL=$(python3 -c "import json; print(json.load(open('outputs.json'))['TargetAppStack']['CloudFrontUrl'])")
+      - echo "DAST Target URL - $TARGET_URL"
+      - mkdir -p reports
+      - echo "Running OWASP ZAP baseline scan..."
+      - docker run --rm -v $(pwd)/reports:/zap/wrk/:rw zaproxy/zap-stable zap-baseline.py -t $TARGET_URL -r zap-report.html -J zap-report.json -l WARN || true
+      - if [ -f reports/zap-report.json ]; then HIGH_ALERTS=$(python3 -c "import json; data=json.load(open('reports/zap-report.json')); alerts=data.get('site',[{}])[0].get('alerts',[]) if isinstance(data.get('site'),list) else []; print(len([a for a in alerts if a.get('riskcode','0') in ('3','4')]))" 2>/dev/null || echo "0"); echo "High/Critical DAST alerts found - $HIGH_ALERTS"; if [ "$HIGH_ALERTS" -gt 0 ]; then echo "DAST gate FAILED"; exit 1; fi; else echo "ZAP report not found, skipping DAST evaluation"; fi
 
 artifacts:
   files:
