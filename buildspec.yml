@@ -32,7 +32,7 @@ phases:
 
   pre_build:
     commands:
-      - echo "=== Phase 2: Pre-Build — Dependency Installation & Static Security Gates ==="
+      - echo "=== Phase 2: Pre-Build --- Dependency Installation & Static Security Gates ==="
 
       # 1. Install application and CDK dependencies
       - echo "Installing root and CDK dependencies..."
@@ -95,7 +95,7 @@ phases:
         export TARGET_URL=$(cat outputs.json | python3 -c "import sys,json; print(json.load(sys.stdin)['TargetAppStack']['CloudFrontUrl'])")
         echo "DAST Target URL: $TARGET_URL"
 
-      # 3. DAST Scan — OWASP ZAP Baseline Scan against the live endpoint
+      # 3. DAST Scan --- OWASP ZAP Baseline Scan against the live endpoint
       - echo "Running OWASP ZAP baseline scan against $TARGET_URL..."
       - |
         docker run --rm \
@@ -108,7 +108,7 @@ phases:
       # NOTE: '|| true' allows the pipeline to continue even if ZAP finds warnings.
       # Remove '|| true' to enforce a hard gate on DAST findings.
 
-      # 4. Evaluate ZAP results — fail on HIGH alerts
+      # 4. Evaluate ZAP results --- fail on HIGH alerts
       - |
         if [ -f reports/zap-report.json ]; then
           HIGH_ALERTS=$(python3 -c "
