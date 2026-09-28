@@ -4,8 +4,11 @@ phases:
   install:
     commands:
       - echo "Installing Trivy..."
-      - TRIVY_VERSION="0.51.1"
-      - curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v${TRIVY_VERSION}
+      - TRIVY_VERSION="0.74.0"
+      - curl -sSL -o trivy.tar.gz "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+      - tar -xzf trivy.tar.gz -C /usr/local/bin trivy
+      - chmod +x /usr/local/bin/trivy
+      - trivy --version
   build:
     commands:
       - echo "Running Trivy SCA dependency scan..."
