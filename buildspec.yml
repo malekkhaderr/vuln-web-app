@@ -10,8 +10,6 @@ phases:
     runtime-versions:
       nodejs: 22
       python: 3.11
-    services:
-      - docker
     commands:
       - echo "=== Phase 1: Installing Dependencies and Security Scanners ==="
 
