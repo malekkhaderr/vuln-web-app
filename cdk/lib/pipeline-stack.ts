@@ -290,14 +290,14 @@ export class PipelineStack extends cdk.Stack {
               commands: [
                 'npm ci',
                 'cd cdk && npm ci && cd ..',
-                'export CDK_DEFAULT_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)',
-                'export CDK_DEFAULT_REGION=${AWS_DEFAULT_REGION:-eu-west-1}',
-                'export WEB_ACL_ARN=$(aws ssm get-parameter --name /vuln-web-app/waf-acl-arn --query Parameter.Value --output text --region us-east-1 2>/dev/null || echo "")',
-                'if [ -z "$WEB_ACL_ARN" ]; then export WEB_ACL_ARN="arn:aws:wafv2:us-east-1:${CDK_DEFAULT_ACCOUNT}:global/webacl/ci-placeholder/ci-placeholder"; fi',
               ],
             },
             build: {
               commands: [
+                'export CDK_DEFAULT_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)',
+                'export CDK_DEFAULT_REGION=${AWS_DEFAULT_REGION:-eu-west-1}',
+                'export WEB_ACL_ARN=$(aws ssm get-parameter --name /vuln-web-app/waf-acl-arn --query Parameter.Value --output text --region us-east-1 2>/dev/null || echo "")',
+                'if [ -z "$WEB_ACL_ARN" ]; then export WEB_ACL_ARN="arn:aws:wafv2:us-east-1:${CDK_DEFAULT_ACCOUNT}:global/webacl/ci-placeholder/ci-placeholder"; fi',
                 'echo "Synthesizing CDK with cdk-nag enforcement..."',
                 'cd cdk && npx cdk synth --app "npx tsx bin/target-app.ts" -o cdk.out && cd ..',
                 'echo "Running Checkov IaC scan..."',
@@ -335,13 +335,14 @@ export class PipelineStack extends cdk.Stack {
               commands: [
                 'npm ci',
                 'cd cdk && npm ci && cd ..',
-                'export CDK_DEFAULT_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)',
-                'export CDK_DEFAULT_REGION=${AWS_DEFAULT_REGION:-eu-west-1}',
-                'export WEB_ACL_ARN=$(aws ssm get-parameter --name /vuln-web-app/waf-acl-arn --query Parameter.Value --output text --region us-east-1)',
               ],
             },
             build: {
               commands: [
+                'export CDK_DEFAULT_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)',
+                'export CDK_DEFAULT_REGION=${AWS_DEFAULT_REGION:-eu-west-1}',
+                'export WEB_ACL_ARN=$(aws ssm get-parameter --name /vuln-web-app/waf-acl-arn --query Parameter.Value --output text --region us-east-1 2>/dev/null || echo "")',
+                'if [ -z "$WEB_ACL_ARN" ]; then export WEB_ACL_ARN="arn:aws:wafv2:us-east-1:${CDK_DEFAULT_ACCOUNT}:global/webacl/ci-placeholder/ci-placeholder"; fi',
                 'echo "Deploying TargetAppStack..."',
                 'cd cdk && npx cdk deploy TargetAppStack --app "npx tsx bin/target-app.ts" --require-approval never --outputs-file ../outputs.json && cd ..',
                 'cat outputs.json',
