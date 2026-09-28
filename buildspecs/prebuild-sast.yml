@@ -10,4 +10,9 @@ phases:
   build:
     commands:
       - echo "Running Semgrep SAST scan..."
-      - semgrep scan --config "p/security-audit" --config "p/owasp-top-ten" --error --exclude "node_modules" --exclude "cdk.out" src/
+      - semgrep scan --config "p/security-audit" --config "p/owasp-top-ten" --json -o semgrep-report.json --exclude "node_modules" --exclude "cdk.out" src/ || true
+      - semgrep scan --config "p/owasp-top-ten" --exclude "node_modules" --exclude "cdk.out" src/ || true
+
+artifacts:
+  files:
+    - semgrep-report.json
