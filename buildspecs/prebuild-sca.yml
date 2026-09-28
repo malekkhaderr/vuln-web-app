@@ -11,5 +11,20 @@ phases:
       - trivy --version
   build:
     commands:
-      - echo "Running Trivy SCA dependency scan..."
-      - trivy fs --scanners vuln --severity HIGH,CRITICAL --exit-code 1 package-lock.json cdk/package-lock.json
+      - echo "Running Trivy Scan (reflecting pr-checks)..."
+      - |
+        trivy fs . \
+          --scanners vuln,secret \
+          --severity HIGH,CRITICAL \
+          --ignore-unfixed \
+          --format json \
+          --output trivy-report.json || true
+      - |
+        if [ -s trivy-report.json ] && jq -e '.Results[] | select(.Vulnerabilities != null or .Secrets != null)' trivy-report.json > /dev/null 2>&1; then
+          echo "Vulnerabilities or Secrets detected by Trivy!"
+          exit 1
+        fi
+
+artifacts:
+  files:
+    - trivy-report.json

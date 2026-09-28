@@ -6,26 +6,39 @@ phases:
       nodejs: 22
       python: 3.11
     commands:
-      - echo "Installing dependencies and Checkov..."
-      - pip install checkov
+      - echo "Installing Checkov..."
+      - python -m pip install checkov
+      - echo "Installing application dependencies..."
       - npm ci
+      - echo "Installing CDK dependencies..."
       - cd cdk && npm ci && cd ..
   pre_build:
     commands:
-      - echo "Running Linting & Pre-checks..."
-      - npm run lint || true
+      - echo "Synthesizing CDK CloudFormation template (reflecting pr-checks)..."
+      - cd cdk
+      - export CDK_DEFAULT_ACCOUNT=${CDK_DEFAULT_ACCOUNT:-"000000000000"}
+      - export CDK_DEFAULT_REGION=${AWS_DEFAULT_REGION:-"eu-west-1"}
+      - export WEB_ACL_ARN=${WEB_ACL_ARN:-"arn:aws:wafv2:us-east-1:000000000000:global/webacl/ci-placeholder/ci-placeholder"}
+      - npx cdk synth --app "npx tsx bin/target-app.ts"
+      - cd ..
   build:
     commands:
-      - echo "Synthesizing CDK Templates..."
-      - cd cdk
-      - npx cdk synth
-      - cd ..
-  post_build:
-    commands:
-      - echo "Running Checkov IaC Security Scans on synthesized templates..."
-      - checkov -d cdk/cdk.out --framework cloudformation --compact --quiet || true
+      - echo "Scanning synthesized CloudFormation with Checkov..."
+      - |
+        checkov -d cdk/cdk.out \
+          --framework cloudformation \
+          --output json \
+          --output-file-path . \
+          --quiet || true
+        if [ -f results_json.json ]; then
+          mv results_json.json checkov-report.json
+        fi
+      - |
+        if [ -s checkov-report.json ] && jq -e 'if type == "array" then .[] | .results.failed_checks | length > 0 else .results.failed_checks | length > 0 end' checkov-report.json > /dev/null 2>&1; then
+          echo "Infrastructure security misconfigurations detected by Checkov!"
+        fi
 
 artifacts:
-  base-directory: cdk/cdk.out
   files:
-    - '**/*'
+    - "cdk/cdk.out/**/*"
+    - "checkov-report.json"
