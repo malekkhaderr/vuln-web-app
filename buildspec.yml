@@ -38,7 +38,7 @@ phases:
       - export CDK_DEFAULT_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
       - export CDK_DEFAULT_REGION=${AWS_DEFAULT_REGION:-eu-west-1}
       - echo "Deploying to account $CDK_DEFAULT_ACCOUNT in region $CDK_DEFAULT_REGION"
-      - export WEB_ACL_ARN=$(aws ssm get-parameter --name /vuln-web-app/waf-acl-arn --query Parameter.Value --output text --region us-east-1 2>/dev/null || echo "")
+      - export WEB_ACL_ARN=$(aws ssm get-parameter --name /vuln-web-app/staging/web-acl-arn --query Parameter.Value --output text --region eu-west-1 2>/dev/null || echo "")
       - if [ -z "$WEB_ACL_ARN" ]; then echo "WAF ACL ARN not found in SSM, using placeholder"; export WEB_ACL_ARN="arn:aws:wafv2:us-east-1:${CDK_DEFAULT_ACCOUNT}:global/webacl/ci-placeholder/ci-placeholder"; fi
       - echo "Synthesizing CloudFormation templates with cdk-nag enforcement..."
       - cd cdk && npx cdk synth --app "npx tsx bin/target-app.ts" -o cdk.out && cd ..
