@@ -20,7 +20,7 @@ export class PipelineStack extends cdk.Stack {
     const branch = props.githubBranch ?? 'main';
 
     // ──────────────────────────────────────────────
-    // 1. CloudWatch Log Group for CodeBuild logs
+    // 1. CloudWatch Log Group
     // ──────────────────────────────────────────────
     const buildLogGroup = new logs.LogGroup(this, 'BuildLogGroup', {
       logGroupName: '/codebuild/vuln-web-app-pipeline',
@@ -29,15 +29,14 @@ export class PipelineStack extends cdk.Stack {
     });
 
     // ──────────────────────────────────────────────
-    // 2. Least-Privilege IAM Role for CodeBuild
+    // 2. Least-Privilege IAM Role for all CodeBuild projects
     // ──────────────────────────────────────────────
     const deployRole = new iam.Role(this, 'CodeBuildDeployRole', {
       assumedBy: new iam.ServicePrincipal('codebuild.amazonaws.com'),
-      description:
-        'Least-privilege role for CodeBuild to deploy the TargetAppStack via CDK',
+      description: 'Least-privilege role for pipeline CodeBuild projects',
     });
 
-    // CloudFormation — scoped to TargetAppStack
+    // CloudFormation
     deployRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'CloudFormationDeploy',
@@ -115,7 +114,7 @@ export class PipelineStack extends cdk.Stack {
       })
     );
 
-    // IAM PassRole
+    // IAM PassRole + Role Management
     deployRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'IamPassRole',
@@ -129,7 +128,6 @@ export class PipelineStack extends cdk.Stack {
       })
     );
 
-    // IAM Role Management
     deployRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'IamRoleManagement',
@@ -149,7 +147,7 @@ export class PipelineStack extends cdk.Stack {
       })
     );
 
-    // SSM — read WAF ACL ARN
+    // SSM
     deployRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'SsmReadWafArn',
@@ -169,16 +167,11 @@ export class PipelineStack extends cdk.Stack {
       })
     );
 
-    // S3 — CDK asset staging bucket
+    // S3 CDK staging
     deployRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'CdkStagingBucket',
-        actions: [
-          's3:GetObject',
-          's3:PutObject',
-          's3:ListBucket',
-          's3:GetBucketLocation',
-        ],
+        actions: ['s3:GetObject', 's3:PutObject', 's3:ListBucket', 's3:GetBucketLocation'],
         resources: [
           `arn:aws:s3:::cdk-*-assets-${this.account}-${this.region}`,
           `arn:aws:s3:::cdk-*-assets-${this.account}-${this.region}/*`,
@@ -195,7 +188,7 @@ export class PipelineStack extends cdk.Stack {
       })
     );
 
-    // CloudWatch Logs for Lambda
+    // CloudWatch Logs
     deployRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'CloudWatchLogsDeploy',
@@ -215,44 +208,205 @@ export class PipelineStack extends cdk.Stack {
     );
 
     // ──────────────────────────────────────────────
-    // 3. CodeBuild Project (used as the build action in CodePipeline)
+    // 3. Shared build environment config
     // ──────────────────────────────────────────────
-    const buildProject = new codebuild.PipelineProject(
+    const buildEnvironment: codebuild.BuildEnvironment = {
+      buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
+      computeType: codebuild.ComputeType.MEDIUM,
+      privileged: true,
+    };
+
+    const cloudWatchLogging: codebuild.LoggingOptions = {
+      cloudWatch: { logGroup: buildLogGroup, enabled: true },
+    };
+
+    // ──────────────────────────────────────────────
+    // Stage 2: Security Scan (Trivy SCA + Secret Scan)
+    // ──────────────────────────────────────────────
+    const securityScanProject = new codebuild.PipelineProject(
       this,
-      'DeployBuildProject',
+      'SecurityScanProject',
       {
-        projectName: 'VulnWebApp-DeployBuild',
-        description:
-          'DevSecOps: SAST/SCA, cdk synth (cdk-nag), Checkov, Deploy, DAST (OWASP ZAP)',
+        projectName: 'VulnWebApp-SecurityScan',
+        description: 'Trivy SCA dependency and secret scanning',
         role: deployRole,
-        environment: {
-          buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
-          computeType: codebuild.ComputeType.MEDIUM,
-          privileged: true,
-        },
-        buildSpec: codebuild.BuildSpec.fromSourceFilename('buildspec.yml'),
-        logging: {
-          cloudWatch: {
-            logGroup: buildLogGroup,
-            enabled: true,
+        environment: buildEnvironment,
+        logging: cloudWatchLogging,
+        timeout: cdk.Duration.minutes(15),
+        buildSpec: codebuild.BuildSpec.fromObject({
+          version: '0.2',
+          phases: {
+            install: {
+              'runtime-versions': { nodejs: 22 },
+              commands: [
+                'curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin',
+                'trivy --version',
+              ],
+            },
+            pre_build: {
+              commands: [
+                'npm ci',
+                'cd cdk && npm ci && cd ..',
+              ],
+            },
+            build: {
+              commands: [
+                'echo "Running Trivy SCA and Secret scan..."',
+                'trivy fs --security-checks vuln,secret --severity HIGH,CRITICAL --exit-code 0 --ignore-unfixed .',
+              ],
+            },
           },
-        },
-        timeout: cdk.Duration.minutes(30),
+        }),
       }
     );
 
     // ──────────────────────────────────────────────
-    // 4. CodePipeline — Source + Build stages
+    // Stage 3: CDK Synth + IaC Security Scan (Checkov)
+    // ──────────────────────────────────────────────
+    const buildSynthProject = new codebuild.PipelineProject(
+      this,
+      'BuildSynthProject',
+      {
+        projectName: 'VulnWebApp-BuildSynth',
+        description: 'CDK synthesis with cdk-nag and Checkov IaC scanning',
+        role: deployRole,
+        environment: buildEnvironment,
+        logging: cloudWatchLogging,
+        timeout: cdk.Duration.minutes(15),
+        buildSpec: codebuild.BuildSpec.fromObject({
+          version: '0.2',
+          env: {
+            'exported-variables': ['WEB_ACL_ARN', 'CDK_DEFAULT_ACCOUNT', 'CDK_DEFAULT_REGION'],
+          },
+          phases: {
+            install: {
+              'runtime-versions': { nodejs: 22, python: 3.11 },
+              commands: [
+                'npm install -g aws-cdk',
+                'pip3 install --no-cache-dir checkov',
+              ],
+            },
+            pre_build: {
+              commands: [
+                'npm ci',
+                'cd cdk && npm ci && cd ..',
+                'export CDK_DEFAULT_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)',
+                'export CDK_DEFAULT_REGION=${AWS_DEFAULT_REGION:-eu-west-1}',
+                'export WEB_ACL_ARN=$(aws ssm get-parameter --name /vuln-web-app/waf-acl-arn --query Parameter.Value --output text --region us-east-1 2>/dev/null || echo "")',
+                'if [ -z "$WEB_ACL_ARN" ]; then export WEB_ACL_ARN="arn:aws:wafv2:us-east-1:${CDK_DEFAULT_ACCOUNT}:global/webacl/ci-placeholder/ci-placeholder"; fi',
+              ],
+            },
+            build: {
+              commands: [
+                'echo "Synthesizing CDK with cdk-nag enforcement..."',
+                'cd cdk && npx cdk synth --app "npx tsx bin/target-app.ts" -o cdk.out && cd ..',
+                'echo "Running Checkov IaC scan..."',
+                'checkov -d cdk/cdk.out --config-file .checkov.yml --framework cloudformation --compact || true',
+              ],
+            },
+          },
+        }),
+      }
+    );
+
+    // ──────────────────────────────────────────────
+    // Stage 4: CDK Deploy
+    // ──────────────────────────────────────────────
+    const deployProject = new codebuild.PipelineProject(
+      this,
+      'DeployProject',
+      {
+        projectName: 'VulnWebApp-Deploy',
+        description: 'CDK deploy TargetAppStack to AWS',
+        role: deployRole,
+        environment: buildEnvironment,
+        logging: cloudWatchLogging,
+        timeout: cdk.Duration.minutes(20),
+        buildSpec: codebuild.BuildSpec.fromObject({
+          version: '0.2',
+          phases: {
+            install: {
+              'runtime-versions': { nodejs: 22 },
+              commands: [
+                'npm install -g aws-cdk',
+              ],
+            },
+            pre_build: {
+              commands: [
+                'npm ci',
+                'cd cdk && npm ci && cd ..',
+                'export CDK_DEFAULT_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)',
+                'export CDK_DEFAULT_REGION=${AWS_DEFAULT_REGION:-eu-west-1}',
+                'export WEB_ACL_ARN=$(aws ssm get-parameter --name /vuln-web-app/waf-acl-arn --query Parameter.Value --output text --region us-east-1)',
+              ],
+            },
+            build: {
+              commands: [
+                'echo "Deploying TargetAppStack..."',
+                'cd cdk && npx cdk deploy TargetAppStack --app "npx tsx bin/target-app.ts" --require-approval never --outputs-file ../outputs.json && cd ..',
+                'cat outputs.json',
+              ],
+            },
+          },
+          artifacts: {
+            files: ['outputs.json'],
+          },
+        }),
+      }
+    );
+
+    // ──────────────────────────────────────────────
+    // Stage 5: DAST (OWASP ZAP)
+    // ──────────────────────────────────────────────
+    const dastProject = new codebuild.PipelineProject(
+      this,
+      'DastProject',
+      {
+        projectName: 'VulnWebApp-DAST',
+        description: 'OWASP ZAP baseline DAST scan against deployed CloudFront',
+        role: deployRole,
+        environment: buildEnvironment,
+        logging: cloudWatchLogging,
+        timeout: cdk.Duration.minutes(15),
+        buildSpec: codebuild.BuildSpec.fromObject({
+          version: '0.2',
+          phases: {
+            install: {
+              'runtime-versions': { python: 3.11 },
+              commands: [
+                'docker --version',
+              ],
+            },
+            build: {
+              commands: [
+                'export TARGET_URL=$(python3 -c "import json; print(json.load(open(\'outputs.json\'))[\'TargetAppStack\'][\'CloudFrontUrl\'])")',
+                'echo "DAST Target: $TARGET_URL"',
+                'mkdir -p reports',
+                'docker run --rm -v $(pwd)/reports:/zap/wrk/:rw zaproxy/zap-stable zap-baseline.py -t $TARGET_URL -r zap-report.html -J zap-report.json -l WARN || true',
+                'echo "DAST scan complete. Reports saved to reports/"',
+              ],
+            },
+          },
+          artifacts: {
+            files: ['reports/**/*'],
+          },
+        }),
+      }
+    );
+
+    // ──────────────────────────────────────────────
+    // 4. CodePipeline with 5 stages
     // ──────────────────────────────────────────────
     const sourceOutput = new codepipeline.Artifact('SourceOutput');
-    const buildOutput = new codepipeline.Artifact('BuildOutput');
+    const deployOutput = new codepipeline.Artifact('DeployOutput');
+    const dastOutput = new codepipeline.Artifact('DastOutput');
 
     const pipeline = new codepipeline.Pipeline(this, 'DeployPipeline', {
       pipelineName: 'VulnWebApp-DeployPipeline',
       restartExecutionOnUpdate: true,
     });
 
-    // Stage 1: Source — pull code from GitHub on merge to main
+    // Stage 1: Source
     pipeline.addStage({
       stageName: 'Source',
       actions: [
@@ -268,15 +422,52 @@ export class PipelineStack extends cdk.Stack {
       ],
     });
 
-    // Stage 2: Build — runs the full DevSecOps buildspec
+    // Stage 2: Security Scan
     pipeline.addStage({
-      stageName: 'SecurityScan-Build-Deploy',
+      stageName: 'SecurityScan',
       actions: [
         new codepipelineActions.CodeBuildAction({
-          actionName: 'DevSecOps-Pipeline',
-          project: buildProject,
+          actionName: 'Trivy-SCA-SecretScan',
+          project: securityScanProject,
           input: sourceOutput,
-          outputs: [buildOutput],
+        }),
+      ],
+    });
+
+    // Stage 3: Build and Synth
+    pipeline.addStage({
+      stageName: 'Build-Synth-IaC',
+      actions: [
+        new codepipelineActions.CodeBuildAction({
+          actionName: 'CDK-Synth-Checkov',
+          project: buildSynthProject,
+          input: sourceOutput,
+        }),
+      ],
+    });
+
+    // Stage 4: Deploy
+    pipeline.addStage({
+      stageName: 'Deploy',
+      actions: [
+        new codepipelineActions.CodeBuildAction({
+          actionName: 'CDK-Deploy',
+          project: deployProject,
+          input: sourceOutput,
+          outputs: [deployOutput],
+        }),
+      ],
+    });
+
+    // Stage 5: DAST
+    pipeline.addStage({
+      stageName: 'DAST',
+      actions: [
+        new codepipelineActions.CodeBuildAction({
+          actionName: 'OWASP-ZAP-Scan',
+          project: dastProject,
+          input: deployOutput,
+          outputs: [dastOutput],
         }),
       ],
     });
@@ -286,22 +477,14 @@ export class PipelineStack extends cdk.Stack {
     // ──────────────────────────────────────────────
     new cdk.CfnOutput(this, 'PipelineName', {
       value: pipeline.pipelineName,
-      description: 'Name of the CodePipeline',
     });
 
     new cdk.CfnOutput(this, 'PipelineArn', {
       value: pipeline.pipelineArn,
-      description: 'ARN of the CodePipeline',
-    });
-
-    new cdk.CfnOutput(this, 'CodeBuildProjectName', {
-      value: buildProject.projectName,
-      description: 'Name of the CodeBuild project used by the pipeline',
     });
 
     new cdk.CfnOutput(this, 'DeployRoleArn', {
       value: deployRole.roleArn,
-      description: 'ARN of the least-privilege deployment IAM role',
     });
   }
 }
