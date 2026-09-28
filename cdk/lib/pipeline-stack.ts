@@ -36,6 +36,19 @@ export class PipelineStack extends cdk.Stack {
       description: 'Least-privilege role for pipeline CodeBuild projects',
     });
 
+    // CloudFormation Describe (Needs *)
+    deployRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'CloudFormationDescribe',
+        actions: [
+          'cloudformation:DescribeStacks',
+          'cloudformation:DescribeStackEvents',
+          'cloudformation:DescribeChangeSet',
+        ],
+        resources: ['*'],
+      })
+    );
+
     // CloudFormation
     deployRole.addToPolicy(
       new iam.PolicyStatement({
@@ -44,13 +57,10 @@ export class PipelineStack extends cdk.Stack {
           'cloudformation:CreateStack',
           'cloudformation:UpdateStack',
           'cloudformation:DeleteStack',
-          'cloudformation:DescribeStacks',
-          'cloudformation:DescribeStackEvents',
           'cloudformation:GetTemplate',
           'cloudformation:CreateChangeSet',
           'cloudformation:ExecuteChangeSet',
           'cloudformation:DeleteChangeSet',
-          'cloudformation:DescribeChangeSet',
         ],
         resources: [
           `arn:aws:cloudformation:${this.region}:${this.account}:stack/TargetAppStack/*`,
@@ -154,6 +164,7 @@ export class PipelineStack extends cdk.Stack {
         actions: ['ssm:GetParameter'],
         resources: [
           `arn:aws:ssm:eu-west-1:${this.account}:parameter/vuln-web-app/staging/web-acl-arn`,
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/cdk-bootstrap/*/version`,
         ],
       })
     );
