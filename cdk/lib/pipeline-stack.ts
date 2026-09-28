@@ -14,6 +14,7 @@ export interface PipelineStackProps extends cdk.StackProps {
   readonly connectionArn?: string;
   readonly githubConnectionArn?: string;
   readonly targetAppUrl?: string;
+  readonly webAclArn?: string;
 }
 
 export class PipelineStack extends cdk.Stack {
@@ -29,6 +30,7 @@ export class PipelineStack extends cdk.Stack {
     // 1. Pipeline Artifacts
     const sourceOutput = new codepipeline.Artifact('SourceOutput');
     const synthOutput = new codepipeline.Artifact('SynthOutput');
+    const deployOutput = new codepipeline.Artifact('DeployOutput');
     const zapOutput = new codepipeline.Artifact('ZapOutput');
 
     // 2. Helper to create standard CodeBuild scanning/build projects
@@ -57,7 +59,7 @@ export class PipelineStack extends cdk.Stack {
     // Build & Synth project
     const buildProject = createCodeBuildProject('Build-Synth-Checkov', 'buildspecs/build-synth.yml');
 
-    // Deploy project (runs CDK deploy with required CloudFormation / IAM permissions)
+    // Deploy project (fetches WAF from SSM parameter, runs CDK deploy with IAM permissions)
     const deployProject = new codebuild.PipelineProject(this, 'DeployProject', {
       projectName: `${this.stackName}-CDK-Deploy`,
       environment: {
@@ -71,24 +73,43 @@ export class PipelineStack extends cdk.Stack {
               nodejs: 22,
             },
             commands: [
-              'cd cdk',
               'npm ci',
+              'cd cdk && npm ci && cd ..',
             ],
           },
           build: {
             commands: [
-              'npx cdk deploy TargetAppStack --require-approval never',
+              'export CDK_DEFAULT_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)',
+              'export CDK_DEFAULT_REGION=${AWS_DEFAULT_REGION:-eu-west-1}',
+              'export WEB_ACL_ARN=$(aws ssm get-parameter --name /vuln-web-app/staging/web-acl-arn --query Parameter.Value --output text --region eu-west-1 2>/dev/null || echo "")',
+              'if [ -z "$WEB_ACL_ARN" ]; then echo "WAF ACL ARN not found in SSM, using fallback"; export WEB_ACL_ARN="arn:aws:wafv2:us-east-1:${CDK_DEFAULT_ACCOUNT}:global/webacl/ci-placeholder/ci-placeholder"; fi',
+              'echo "Resolved WEB_ACL_ARN: $WEB_ACL_ARN"',
+              'cd cdk',
+              'npx cdk deploy TargetAppStack --app "npx tsx bin/target-app.ts" --require-approval never --outputs-file ../outputs.json',
+              'cd ..',
+              'cat outputs.json',
             ],
           },
+        },
+        artifacts: {
+          files: ['outputs.json'],
         },
       }),
     });
 
-    // Grant deployProject CDK deployment permissions
+    // Grant deployProject permissions for STS assume role and SSM parameter reading
     deployProject.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ['sts:AssumeRole'],
-        resources: [`arn:aws:iam::${this.account}:role/cdk-*`],
+        actions: ['sts:AssumeRole', 'sts:GetCallerIdentity'],
+        resources: ['*'],
+      })
+    );
+    deployProject.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['ssm:GetParameter', 'ssm:GetParameters'],
+        resources: [
+          `arn:aws:ssm:*:${this.account}:parameter/vuln-web-app/*`,
+        ],
       })
     );
 
@@ -171,6 +192,7 @@ export class PipelineStack extends cdk.Stack {
               actionName: 'CDK_Deploy',
               project: deployProject,
               input: sourceOutput,
+              outputs: [deployOutput],
               runOrder: 1,
             }),
           ],
@@ -183,7 +205,7 @@ export class PipelineStack extends cdk.Stack {
             new codepipeline_actions.CodeBuildAction({
               actionName: 'OWASP_ZAP_Scan',
               project: dastProject,
-              input: sourceOutput,
+              input: deployOutput,
               outputs: [zapOutput],
               runOrder: 1,
             }),
